@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE/local
+.idea/
+.vscode/
+
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Project artifacts
+runs/*
+!runs/.gitkeep
+!runs/__init__.py
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# Competition submissions
+submissions/
+submission.zip
+predictions/
+

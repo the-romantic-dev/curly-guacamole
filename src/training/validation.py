@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+import numpy as np
+import torch
+
+from src.progress import ConsoleProgress
+from src.training.metric import AICAccumulator, AICResult
+
+if TYPE_CHECKING:
+    from src.config import ExperimentConfig
+    from src.training.builders import AmpContext
+
+
+@dataclass(frozen=True)
+class ValidationResult:
+    """Histograms and the selected metrics from one validation pass."""
+
+    accumulator: AICAccumulator
+    tuned: AICResult
+
+    @property
+    def operating_point(self) -> tuple[float, float, float]:
+        return (self.tuned.mask_threshold, self.tuned.cls_threshold, self.tuned.min_area)
+
+
+@torch.no_grad()
+def validate(
+    model,
+    loader: Iterable[dict[str, torch.Tensor]],
+    amp: AmpContext,
+    config: ExperimentConfig,
+    device: torch.device,
+) -> ValidationResult:
+    model.eval()
+    n_bins = config.eval.n_bins
+    acc = AICAccumulator(n_bins=n_bins)
+
+    for batch in ConsoleProgress.iterate(loader, "Валидация, батчи"):
+        images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
+        masks = batch["mask"].to(device, non_blocking=True)
+        fmap = batch["fmap"].to(device, non_blocking=True) if "fmap" in batch else None
+
+        with amp.autocast():
+            out = model(images, fmap)
+
+        probs = torch.sigmoid(out["logits"].float())
+        cls = torch.sigmoid(out["cls_logits"].float()).reshape(-1)
+
+        batch_size = probs.shape[0]
+        flat = probs.clamp(0, 1).reshape(batch_size, -1)
+        idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
+        offset = torch.arange(batch_size, device=idx.device).unsqueeze(1) * n_bins
+        gt = masks.reshape(batch_size, -1) > 0.5
+        hist_all = torch.bincount(
+            (idx + offset).reshape(-1),
+            minlength=batch_size * n_bins,
+        ).reshape(batch_size, n_bins)
+        hist_gt = torch.bincount(
+            (idx + offset)[gt],
+            minlength=batch_size * n_bins,
+        ).reshape(batch_size, n_bins)
+
+        acc.update_hist(
+            hist_all.cpu().numpy(),
+            hist_gt.cpu().numpy(),
+            gt.sum(1).cpu().numpy(),
+            np.full(batch_size, flat.shape[1], dtype=np.int64),
+            cls.cpu().numpy(),
+        )
+
+    ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
+    tuned = acc.best(
+        config.eval.mask_thresholds,
+        config.eval.cls_thresholds,
+        config.eval.min_areas,
+    )
+    ConsoleProgress.info(f"Подбор порогов завершён: {tuned}")
+    return ValidationResult(accumulator=acc, tuned=tuned)
+
+
+

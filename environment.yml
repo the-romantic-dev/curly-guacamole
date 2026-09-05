@@ -1,0 +1,24 @@
+name: challenges
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - pandas
+  - pillow
+  - scikit-learn
+  - pyyaml
+  - pyarrow
+  - pytest
+  - ruff
+  - tensorboard
+  - pip:
+      - albumentations
+      - opencv-python-headless
+      - timm
+      - torch
+      - torchvision

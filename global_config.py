@@ -1,0 +1,1 @@
+DATA_PATH = r"D:\Challenges\AIIJC2026\data"
