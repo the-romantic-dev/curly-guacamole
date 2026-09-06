@@ -13,6 +13,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
 from src.data.augmentation.base import require_fmap
 from src.data.data_sample import DataSample
+from src.data.letterbox import Letterbox
 from src.data.targets import mask_to_tensor
 from src.forensic.dct import resize_fmaps
 
@@ -56,11 +57,17 @@ def image_to_tensor(image: Any):
 class SamplePreprocessor:
     """Prepare synchronized samples for the model and optional target heads."""
 
-    def __init__(self, image_size: int, fmap_channels: Sequence[int] | None = None):
+    def __init__(self, image_size: int, fmap_channels: Sequence[int] | None = None,
+                 resize_mode: str = "stretch"):
         self.image_size = image_size
         self.fmap_channels = fmap_channels
+        if resize_mode not in {"stretch", "letterbox"}:
+            raise ValueError("resize_mode must be 'stretch' or 'letterbox'")
+        self.letterbox = Letterbox(image_size) if resize_mode == "letterbox" else None
 
     def resize(self, sample: DataSample) -> DataSample:
+        if self.letterbox is not None:
+            return self.letterbox.apply(sample)
         return image_resize(sample, self.image_size)
 
     def to_output(self, sample: DataSample) -> dict[str, torch.Tensor]:
@@ -69,6 +76,14 @@ class SamplePreprocessor:
         if self.fmap_channels is not None:
             fmap = fmap[list(self.fmap_channels)]
         output = {"image": sample.image, "fmap": torch.from_numpy(np.ascontiguousarray(fmap))}
+        if sample.content_size is not None:
+            h, w = sample.content_size
+            valid = torch.zeros((1, self.image_size, self.image_size), dtype=torch.bool)
+            valid[:, :h, :w] = True
+            # Reset padding after photometric augmentation and normalization.
+            output["image"] = output["image"].masked_fill(~valid, 0)
+            output["valid_mask"] = valid
+            output["content_size"] = torch.tensor([h, w], dtype=torch.int64)
         if sample.mask is not None:
             mask = mask_to_tensor(sample.mask)
             output["mask"] = mask

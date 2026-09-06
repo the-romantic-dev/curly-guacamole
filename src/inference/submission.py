@@ -14,6 +14,7 @@ from src.config import ModelConfig
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
 from src.inference.predict import Prediction, Predictor, ThresholdConfig
+from src.progress import ConsoleProgress
 from src.training.builders import AmpContext, build_model
 from src.training.runs import Run
 
@@ -64,6 +65,7 @@ class SubmissionWriter:
             raise ValueError("predictions are missing for some template rows")
         self.output_dir.mkdir(parents=True, exist_ok=True)
         csv_path = self.output_dir / "submission.csv"
+        ConsoleProgress.info(f"Submission: сохранение таблицы {csv_path}")
         self.template.to_csv(csv_path, index=False)
         return csv_path
 
@@ -78,6 +80,7 @@ class InferenceConfig:
     amp: str
     batch_size: int
     workers: int
+    resize_mode: str = "stretch"
 
     @classmethod
     def from_snapshot(cls, snapshot: dict) -> "InferenceConfig":
@@ -92,6 +95,7 @@ class InferenceConfig:
             )}),
             int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
+            str(dataset.get("resize_mode", "stretch")),
         )
 
 
@@ -105,6 +109,7 @@ def create_submission(
     device: str | None = None,
 ) -> Path:
     """Load ckpt/best.pt (EMA preferred) and write the template-aligned submission."""
+    ConsoleProgress.info(f"Submission: загрузка конфигурации запуска {run_dir}")
     run = Run.open(run_dir)
     config = InferenceConfig.from_snapshot(run.snapshot)
     if thresholds is None:
@@ -113,16 +118,35 @@ def create_submission(
         if not all(key in best for key in keys):
             raise ValueError("run summary has no operating point; pass thresholds explicitly")
         thresholds = ThresholdConfig(**{key: float(best[key]) for key in keys})
+    ConsoleProgress.info(
+        f"Submission: пороги mask={thresholds.mask_threshold:g}, "
+        f"cls={thresholds.cls_threshold:g}, min_area={thresholds.min_area:g}"
+    )
+    ConsoleProgress.info("Submission: чтение тестовых данных и шаблона")
     workspace = DataWorkspace(Path(data_path) if data_path is not None else config.data_path)
     test_rows = workspace.test_csv
     template = pd.read_csv(template_path or workspace.test_root / "submission.csv")
     writer = SubmissionWriter(template, test_rows, output_dir)
-    dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed, mode="test")
+    dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed,
+                           mode="test", resize_mode=config.resize_mode)
     inference_device = torch.device(device or config.device)
+    ConsoleProgress.info(
+        f"Submission: изображений {len(test_rows)}, устройство {inference_device}, "
+        f"batch_size={config.batch_size}"
+    )
     amp = AmpContext(inference_device, torch.bfloat16 if config.amp == "bf16" else torch.float16,
                      inference_device.type == "cuda" and config.amp != "off", False)
-    checkpoint = torch.load(run.dir / "ckpt" / "best.pt", map_location="cpu", weights_only=True)
+    checkpoint_path = run.dir / "ckpt" / "best.pt"
+    ConsoleProgress.info(f"Submission: загрузка checkpoint {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    weights = "ema" if checkpoint.get("ema") is not None else "model"
+    ConsoleProgress.info(f"Submission: создание модели и применение весов {weights}")
     model = build_model(config.model, pretrained=False)
-    model.load_state_dict(checkpoint["ema"] if checkpoint.get("ema") is not None else checkpoint["model"])
+    model.load_state_dict(checkpoint[weights])
     loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.workers)
-    return writer.write(Predictor(model, thresholds, amp).predict(loader))
+    ConsoleProgress.info(f"Submission: перенос модели на {inference_device}")
+    predictor = Predictor(model, thresholds, amp)
+    batches = ConsoleProgress.iterate(loader, "Submission: предсказание и сохранение PNG (батчи)")
+    csv_path = writer.write(predictor.predict(batches))
+    ConsoleProgress.info(f"Submission: готово, масок {len(test_rows)}, результат {csv_path.parent}")
+    return csv_path

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
+from src.data.letterbox import Letterbox
 from src.training.builders import AmpContext
 
 
@@ -40,23 +40,29 @@ class Predictor:
         for batch in loader:
             # Leave inference/autocast contexts before yielding to caller code.
             with torch.inference_mode(), self.amp.autocast():
+                kwargs = ({"valid_mask": batch["valid_mask"].to(self.amp.device)}
+                          if "valid_mask" in batch else {})
                 output = self.model(
                     batch["image"].to(self.amp.device),
                     batch["fmap"].to(self.amp.device),
+                    **kwargs,
                 )
                 probabilities = output["logits"].float().sigmoid()
                 cls_probs = output["cls_logits"].float().sigmoid().flatten()
             for index, image_path in enumerate(batch["image_path"]):
                 size = tuple(int(value) for value in batch["original_size"][index])
-                mask = self.binary_mask(probabilities[index:index + 1], float(cls_probs[index]), size)
+                content = batch["content_size"][index] if "content_size" in batch else None
+                mask = self.binary_mask(probabilities[index:index + 1], float(cls_probs[index]), size,
+                                        content_size=content)
                 yield Prediction(image_path, mask)
 
     def binary_mask(
         self, probability: torch.Tensor, cls_probability: float, size: tuple[int, int],
+        *, content_size=None,
     ) -> np.ndarray:
         if len(size) != 2 or min(size) <= 0:
             raise ValueError("original size must contain positive height and width")
-        restored = F.interpolate(probability, size=size, mode="bilinear", align_corners=False)
+        restored = Letterbox.restore(probability, size, content_size)
         mask = restored[0, 0].cpu().numpy() >= self.thresholds.mask_threshold
         if cls_probability < self.thresholds.cls_threshold or mask.mean() < self.thresholds.min_area:
             mask[:] = False

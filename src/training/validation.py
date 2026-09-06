@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import torch
 
+from src.data.letterbox import Letterbox
 from src.progress import ConsoleProgress
 from src.training.metric import AICAccumulator, AICResult
 
@@ -21,6 +22,7 @@ class ValidationResult:
 
     accumulator: AICAccumulator
     tuned: AICResult
+    resolution: str = "resized"
 
     @property
     def operating_point(self) -> tuple[float, float, float]:
@@ -41,36 +43,31 @@ def validate(
 
     for batch in ConsoleProgress.iterate(loader, "Валидация, батчи"):
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
-        masks = batch["mask"].to(device, non_blocking=True)
         fmap = batch["fmap"].to(device, non_blocking=True) if "fmap" in batch else None
 
         with amp.autocast():
-            out = model(images, fmap)
+            kwargs = {"valid_mask": batch["valid_mask"].to(device)} if "valid_mask" in batch else {}
+            out = model(images, fmap, **kwargs)
 
         probs = torch.sigmoid(out["logits"].float())
         cls = torch.sigmoid(out["cls_logits"].float()).reshape(-1)
 
-        batch_size = probs.shape[0]
-        flat = probs.clamp(0, 1).reshape(batch_size, -1)
-        idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
-        offset = torch.arange(batch_size, device=idx.device).unsqueeze(1) * n_bins
-        gt = masks.reshape(batch_size, -1) > 0.5
-        hist_all = torch.bincount(
-            (idx + offset).reshape(-1),
-            minlength=batch_size * n_bins,
-        ).reshape(batch_size, n_bins)
-        hist_gt = torch.bincount(
-            (idx + offset)[gt],
-            minlength=batch_size * n_bins,
-        ).reshape(batch_size, n_bins)
-
-        acc.update_hist(
-            hist_all.cpu().numpy(),
-            hist_gt.cpu().numpy(),
-            gt.sum(1).cpu().numpy(),
-            np.full(batch_size, flat.shape[1], dtype=np.int64),
-            cls.cpu().numpy(),
-        )
+        if config.eval.resolution == "original":
+            if "original_mask" not in batch:
+                raise ValueError("original validation requires original_mask from the dataset")
+            for index, mask in enumerate(batch["original_mask"]):
+                content = batch["content_size"][index] if "content_size" in batch else None
+                restored = Letterbox.restore(probs[index:index + 1], mask.shape[-2:], content)
+                _update_histograms(acc, restored, mask.to(device).reshape(1, 1, *mask.shape[-2:]),
+                                   cls[index:index + 1])
+        else:
+            masks = batch["mask"].to(device, non_blocking=True)
+            if "content_size" in batch:
+                for index, content in enumerate(batch["content_size"]):
+                    _update_histograms(acc, Letterbox.crop(probs[index:index + 1], content),
+                                       Letterbox.crop(masks[index:index + 1], content), cls[index:index + 1])
+            else:
+                _update_histograms(acc, probs, masks, cls)
 
     ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
     tuned = acc.best(
@@ -79,7 +76,25 @@ def validate(
         config.eval.min_areas,
     )
     ConsoleProgress.info(f"Подбор порогов завершён: {tuned}")
-    return ValidationResult(accumulator=acc, tuned=tuned)
+    return ValidationResult(accumulator=acc, tuned=tuned, resolution=config.eval.resolution)
+
+
+def _update_histograms(acc: AICAccumulator, probs, masks, cls) -> None:
+    batch_size = probs.shape[0]
+    n_bins = acc.n_bins
+    flat = probs.clamp(0, 1).reshape(batch_size, -1)
+    idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
+    offset = torch.arange(batch_size, device=idx.device).unsqueeze(1) * n_bins
+    gt = masks.reshape(batch_size, -1) > 0.5
+    hist_all = torch.bincount((idx + offset).reshape(-1), minlength=batch_size * n_bins)
+    hist_gt = torch.bincount((idx + offset)[gt], minlength=batch_size * n_bins)
+    acc.update_hist(
+        hist_all.reshape(batch_size, n_bins).cpu().numpy(),
+        hist_gt.reshape(batch_size, n_bins).cpu().numpy(),
+        gt.sum(1).cpu().numpy(),
+        np.full(batch_size, flat.shape[1], dtype=np.int64),
+        cls.cpu().numpy(),
+    )
 
 
 

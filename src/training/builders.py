@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.config import ExperimentConfig, ModelConfig, TrainConfig
 from src.data.augmentation.pipeline import AugmentationPipeline
+from src.data.collation import ValidationCollator
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
 
@@ -57,7 +58,7 @@ def build_datasets(
     train_df,
     val_df,
 ) -> tuple[AIIJCDataset, AIIJCDataset]:
-    augmentations = AugmentationPipeline(config.augmentation)
+    augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs)
 
     train_ds = AIIJCDataset(
         data_workspace=data_workspace,
@@ -68,6 +69,7 @@ def build_datasets(
         augmentations=augmentations,
         fmap_channels=None,
         mode="train",
+        resize_mode=config.dataset.resize_mode,
     )
 
     val_ds = AIIJCDataset(
@@ -79,6 +81,8 @@ def build_datasets(
         augmentations=None,
         fmap_channels=None,
         mode="val",
+        resize_mode=config.dataset.resize_mode,
+        original_targets=config.eval.resolution == "original",
     )
 
     return train_ds, val_ds
@@ -128,6 +132,7 @@ def build_loaders(
         num_workers=config.workers,
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
+        collate_fn=ValidationCollator(),
     )
     return train_loader, val_loader
 

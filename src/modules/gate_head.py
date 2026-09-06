@@ -1,4 +1,5 @@
 import torch
+import torch.nn.functional as F
 from torch import nn
 
 
@@ -11,5 +12,11 @@ class GateHead(nn.Module):
         self.drop = nn.Dropout(dropout)
         self.fc = nn.Linear(in_channels, 1)
 
-    def forward(self, deepest):
-        return self.fc(self.drop(torch.flatten(self.pool(deepest), 1)))
+    def forward(self, deepest, valid_mask=None):
+        if valid_mask is None:
+            pooled = self.pool(deepest)
+        else:
+            coverage = F.interpolate(valid_mask.float(), size=deepest.shape[-2:], mode="area")
+            pooled = (deepest.float() * coverage).sum((2, 3), keepdim=True)
+            pooled = pooled / coverage.sum((2, 3), keepdim=True).clamp_min(1e-6)
+        return self.fc(self.drop(torch.flatten(pooled, 1)))

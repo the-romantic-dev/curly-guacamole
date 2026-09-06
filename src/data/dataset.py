@@ -6,7 +6,7 @@ from typing import Literal
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, get_worker_info
 
 from src.data.augmentation.base import AugmentationStage
 from src.data.augmentation.pipeline import AugmentationPipeline
@@ -36,6 +36,8 @@ class AIIJCDataset(Dataset):
             augmentations: AugmentationPipeline | None = None,
             fmap_channels: Sequence[int] | None = None,
             mode: Literal["train", "val", "test"] | None = None,
+            original_targets: bool = False,
+            resize_mode: str = "stretch",
     ):
         super().__init__()
         self.data_workspace = data_workspace
@@ -44,12 +46,19 @@ class AIIJCDataset(Dataset):
         self.has_targets = self.mode in {"train", "val"}
         self.image_size = image_size
         self.seed = seed
+        self.original_targets = original_targets
+        if original_targets and self.mode != "val":
+            raise ValueError("original_targets is only supported for validation")
+        # Shared tensor propagates epochs to persistent DataLoader workers on Windows too.
+        self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
+        self._rng_key = None
+        self._rng = None
         self.augmentations = augmentations
         self.use_augmentations = self.train and augmentations is not None
         self.fmap_channels = fmap_channels
         self.root = data_workspace.train_root if self.has_targets else data_workspace.test_root
         self.sample_io = SampleIO(self.root, self.has_targets)
-        self.preprocessor = SamplePreprocessor(image_size, fmap_channels)
+        self.preprocessor = SamplePreprocessor(image_size, fmap_channels, resize_mode)
         self.sample_io.validate_dataframe(folded_df)
         self.df = folded_df.reset_index(drop=True)
         self.is_negative = (
@@ -72,6 +81,9 @@ class AIIJCDataset(Dataset):
             qtable=luma_qtable(image_path),
         )
         rng = self._make_rng(index)
+        original_mask = sample.mask if self.original_targets else None
+        if self.use_augmentations:
+            self.augmentations.set_epoch(int(self._epoch.item()))
 
         # Recompression must precede DCT extraction; maps use the full frame before crop.
         sample = self._augment(AugmentationStage.BEFORE_FORENSICS, sample, rng)
@@ -80,6 +92,10 @@ class AIIJCDataset(Dataset):
         sample = self.preprocessor.resize(sample)
         sample = self._augment(AugmentationStage.FINAL, sample, rng)
         output = self.preprocessor.to_output(sample)
+        if original_mask is not None:
+            if original_mask.shape != original_size:
+                raise ValueError("original validation mask must match the image size")
+            output["original_mask"] = torch.from_numpy(original_mask > 0.5)
 
         if self.mode == "test":
             output["original_size"] = torch.tensor(original_size, dtype=torch.int64)
@@ -115,8 +131,17 @@ class AIIJCDataset(Dataset):
         return self.sample_io.load_image(path)
 
     def load_mask(self, row: pd.Series, image_shape: tuple[int, int]) -> np.ndarray:
+        # Some supplied masks are smaller than their upscaled images. Align them
+        # as in training; original_targets retains the image resolution, not the file size.
         return self.sample_io.load_mask(row, image_shape)
 
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch.fill_(epoch)
+
     def _make_rng(self, index: int) -> np.random.Generator:
-        worker_seed = torch.initial_seed() % (2 ** 31)
-        return np.random.default_rng((self.seed, index, worker_seed))
+        worker = get_worker_info()
+        key = (self.seed, int(self._epoch.item()), worker.id if worker else 0)
+        if key != self._rng_key:
+            self._rng = np.random.default_rng(key)
+            self._rng_key = key
+        return self._rng

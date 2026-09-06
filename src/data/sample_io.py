@@ -54,12 +54,14 @@ class SampleIO:
             raise FileNotFoundError(f"Cannot read image: {path}")
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    def load_mask(self, row: pd.Series, image_shape: tuple[int, int]) -> np.ndarray:
+    def load_mask(self, row: pd.Series, image_shape: tuple[int, int], *, strict_size: bool = False) -> np.ndarray:
         path = self.mask_path(row)
         mask = read_image(path, cv2.IMREAD_GRAYSCALE)
         if mask is None:
             raise FileNotFoundError(f"Cannot read mask: {path}")
         if mask.shape[:2] != image_shape:
+            if strict_size:
+                raise ValueError(f"original mask size {mask.shape[:2]} differs from image size {image_shape}: {path}")
             height, width = image_shape
             mask = cv2.resize(mask, (width, height), interpolation=cv2.INTER_LINEAR)
         return (mask >= 128).astype(np.float32)

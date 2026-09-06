@@ -54,3 +54,29 @@ def test_dataset_rejects_missing_columns_before_iteration(tmp_path, mode, row):
 def test_dataset_rejects_empty_image_paths(tmp_path, path):
     with pytest.raises(ValueError, match="img_path"):
         AIIJCDataset(DataWorkspace(tmp_path), pd.DataFrame([{"img_path": path}]), False, 32, 42)
+
+
+@pytest.mark.parametrize("positive", [False, True])
+def test_original_validation_aligns_smaller_mask_to_image(tmp_path, positive):
+    workspace = DataWorkspace(tmp_path)
+    root = workspace.train_root
+    root.mkdir(parents=True)
+    image = np.zeros((48, 80, 3), dtype=np.uint8)
+    mask = np.zeros((24, 40), dtype=np.uint8)
+    if positive:
+        mask[:, 20:] = 255
+    cv2.imencode(".png", image)[1].tofile(root / "image.png")
+    cv2.imencode(".png", mask)[1].tofile(root / "mask.png")
+    dataset = AIIJCDataset(
+        workspace, pd.DataFrame([{"chng_img_path": "image.png", "gt_path": "mask.png"}]),
+        False, 32, 42, mode="val", original_targets=True,
+    )
+
+    output = dataset[0]
+
+    expected = torch.zeros((48, 80), dtype=torch.bool)
+    if positive:
+        expected[:, 40:] = True
+    assert torch.equal(output["original_mask"], expected)
+    assert output["mask"].shape == (1, 32, 32)
+    assert output["label"].tolist() == [float(positive)]

@@ -19,12 +19,18 @@ class AugmentationPipeline:
     def __init__(
             self,
             config: AugmentationConfig | Mapping[str, Any],
+            *, total_epochs: int | None = None,
     ):
         self.config = (
             config
             if isinstance(config, AugmentationConfig)
             else AugmentationConfig(**dict(config))
         )
+        self.total_epochs = total_epochs
+        self.epoch = 0
+        if self.config.final_full_frame_epochs and total_epochs is None:
+            raise ValueError("total_epochs is required for the final full-frame phase")
+        self.full_frame_flip = RandomRotateFlip(full_frame=True)
         self.pipeline: dict[AugmentationStage, list[AIIJCAugmentation]] = {
             AugmentationStage.BEFORE_FORENSICS: [
                 RandomJPEGRecompression(
@@ -33,7 +39,9 @@ class AugmentationPipeline:
                 )
             ],
             AugmentationStage.AFTER_FORENSICS: [
-                RandomDCTAlignedCrop(crop_scale_range=self.config.crop_scale_range, full_frame=self.config.full_frame),
+                RandomDCTAlignedCrop(crop_scale_range=self.config.crop_scale_range,
+                                     full_frame=self.config.full_frame,
+                                     foreground_probability=self.config.foreground_crop_probability),
                 RandomRotateFlip(full_frame=self.config.full_frame)
             ],
             AugmentationStage.FINAL: [
@@ -48,8 +56,25 @@ class AugmentationPipeline:
             rng: np.random.Generator | None = None,
     ) -> DataSample:
         stage = AugmentationStage(stage)
+        if stage == AugmentationStage.AFTER_FORENSICS:
+            if rng is None:
+                raise ValueError("after_forensics augmentations require rng")
+            if rng.random() < self.full_frame_probability:
+                return self.full_frame_flip.apply(sample, rng)
 
         for aug in self.pipeline[stage]:
             sample = aug.apply(sample, rng)
 
         return sample
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+    @property
+    def full_frame_probability(self) -> float:
+        final_phase = (self.total_epochs is not None
+                       and self.config.final_full_frame_epochs > 0
+                       and self.epoch >= self.total_epochs - self.config.final_full_frame_epochs)
+        if self.config.full_frame or final_phase:
+            return 1.0
+        return self.config.full_frame_probability

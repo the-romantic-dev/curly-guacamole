@@ -12,3 +12,4 @@ class DataSample:
     mask: np.ndarray | None = None
     fmap: np.ndarray | None = None
     qtable: np.ndarray | None = None
+    content_size: tuple[int, int] | None = None

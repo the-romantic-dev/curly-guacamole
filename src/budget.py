@@ -2,7 +2,7 @@ import torch
 from torch.utils.flop_counter import FlopCounterMode
 
 
-def count_gflops(model, size: int, *, channels: int = 3) -> float:
+def count_gflops(model, size: int, *, channels: int = 3, use_valid_mask: bool = False) -> float:
     """Строгие GFLOPs одного forward на входе (1, channels, size, size).
 
     Модель считается там, где лежит: перекладывать её здесь нельзя, иначе
@@ -18,5 +18,7 @@ def count_gflops(model, size: int, *, channels: int = 3) -> float:
 
     counter = FlopCounterMode(display=False)
     with torch.no_grad(), counter:
-        model(torch.zeros(1, channels, size, size, device=device))
+        kwargs = ({"valid_mask": torch.ones(1, 1, size, size, device=device, dtype=torch.bool)}
+                  if use_valid_mask else {})
+        model(torch.zeros(1, channels, size, size, device=device), **kwargs)
     return counter.get_total_flops() / 1e9

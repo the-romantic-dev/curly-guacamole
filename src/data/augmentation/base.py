@@ -15,6 +15,16 @@ class AugmentationConfig:
     jpeg_recompression_probability: float
     jpeg_recompression_quality_range: tuple[int, int]
     full_frame: bool
+    full_frame_probability: float = 0.0
+    foreground_crop_probability: float = 0.0
+    final_full_frame_epochs: int = 0
+
+    def __post_init__(self):
+        for name in ("full_frame_probability", "foreground_crop_probability"):
+            if not 0.0 <= getattr(self, name) <= 1.0:
+                raise ValueError(f"augmentation.{name} must be in [0, 1]")
+        if self.final_full_frame_epochs < 0:
+            raise ValueError("augmentation.final_full_frame_epochs must be non-negative")
 
 
 class AugmentationStage(StrEnum):

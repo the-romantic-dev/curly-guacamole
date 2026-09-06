@@ -21,6 +21,110 @@ Inspect `summary.json`, `metrics.csv`, and `notes.md` in the run directory.
 `notebooks/16_forensic_maps_before_resize.ipynb` is a historical research archive;
 its old API is not the supported training entry point.
 
+## Mixed-frame experiment
+
+Open `notebooks/baseline_mixed_original.ipynb` (restart the kernel after updating
+the package). It uses `configs/baseline_mixed_original.yaml` and writes to
+`runs/pvt_v2_b2_mixed_original`, keeping the completed baseline separate.
+The architecture, fold, seed and training budget stay at 8 × 24,000 = 192,000
+sample presentations.
+
+- `full_frame_probability: 0.5`: first six epochs mix full frames and square crops.
+- `foreground_crop_probability: 0.5`: half of crop attempts select a GT pixel
+  and an 8-aligned window containing it; empty masks use ordinary random crops.
+- `final_full_frame_epochs: 2`: last two epochs use full frames. Full-frame
+  examples keep flips but do not rotate by 90 degrees.
+- `full_frame: true` still overrides mixing and always selects a full frame.
+- `eval.resolution: original`: restore sigmoid probabilities with bilinear
+  interpolation before histogram threshold tuning against the original binary GT.
+  Different mask sizes are retained in a list by `ValidationCollator`.
+  Malformed GT with a different size from its image raises an error.
+
+RNG streams advance on repeated samples and reset reproducibly per epoch and
+worker; the epoch is shared with persistent workers. Sampling is seeded per
+epoch as well. Reproducibility assumes the same worker count and batch setup;
+the existing checkpoint format does not guarantee bit-identical training resume
+for model-side randomness such as dropout.
+`train/negative_fraction` records the observed fraction after cropping and resize,
+which can differ from the sampler's configured negative fraction.
+
+Legacy YAML files default to crop-only augmentation and resized validation.
+The RNG fix applies to them too. Do not compare the completed baseline's resized
+AIC directly with the new original-resolution AIC: re-evaluate its saved best
+checkpoint on the same validation rows at original resolution first. Subsequent
+fold checks should use a new run name and the same number of sample presentations.
+Changing the new augmentation options or validation resolution when resuming an
+existing run is rejected before its snapshot can be overwritten.
+
+## EfficientViT experiment
+
+`notebooks/efficientvit_b2_mixed_original.ipynb` uses
+`configs/efficientvit_b2_mixed_original.yaml`. The existing `Segmenter` accepts
+the MIT EfficientViT encoder through timm; no encoder adapter is required.
+The backbone is `efficientvit_b2.r288_in1k` (ImageNet classification weights),
+from [MIT EfficientViT](https://github.com/mit-han-lab/efficientvit), corresponding
+to [the multi-scale linear attention paper](https://arxiv.org/abs/2205.14756).
+This is the timm `efficientvit_b*` family, distinct from `efficientvit_m*`.
+
+Its features have strides `[4, 8, 16, 32]` and channels `[48, 96, 192, 384]`.
+The same DCT branch and gated residual fusion attach at strides 8/16/32;
+decoder channels, auxiliary supervision and classification head are retained.
+At **1024 × 1024**, the complete model has **16,310,395 parameters** and costs
+**97.00815744 GFLOPS** per image (batch 1, eval, `FlopCounterMode`, confirmed by
+a real CPU forward with random weights). The PVT baseline at 640 costs 97.1621.
+The CPU DCT preprocessing, mask restoration and metric calculation are outside
+this forward count. H100 latency and full-resolution training GPU memory are
+not yet measured; the active GPU training run was not interrupted.
+
+The experiment keeps the same fold, seed, augmentation schedule, original-size
+validation and 192,000 presentations. Batch 2 with accumulation 8 preserves an
+effective batch of 16; BatchNorm still observes the physical batch of 2.
+Results go to `runs/efficientvit_b2_1024_mixed_original`.
+First training use downloads the configured pretrained weights through timm;
+the compatibility checks use `pretrained=False` and require no download.
+If GPU memory is insufficient, use batch 1 / accumulation 16 in a copied config
+with a new run name. Start this notebook after the current GPU experiment ends.
+
+For reference, measured full-model alternatives with the same decoder:
+
+| Encoder | Image size | GFLOPS |
+| --- | ---: | ---: |
+| EfficientViT-B1 | 1024 | 49.982 |
+| EfficientViT-B2 | 896 | 74.272 |
+| EfficientViT-B2 | 1024 | 97.008 |
+| EfficientViT-B3 | 768 | 112.100 (over budget) |
+
+## EfficientViT with aspect-preserving resize
+
+`notebooks/efficientvit_b2_letterbox.ipynb` selects
+`configs/efficientvit_b2_letterbox.yaml` and writes to
+`runs/efficientvit_b2_1024_letterbox`. All training settings match the EfficientViT
+mixed/original experiment; only `dataset.resize_mode: letterbox` changes geometry
+and enables padding-aware loss, classification pooling and restoration.
+
+The longer side is resized to 1024 (including upscaling smaller images), the
+shorter side is rounded to the nearest pixel, and padding is added on the bottom
+and right. For example, 640×480 becomes 1024×768 plus 256 bottom rows. The top-left
+origin remains aligned with the DCT grid. Square random training crops remain
+square; full-frame examples retain their aspect ratio.
+
+DCT maps are extracted before resizing. Their block centers are resampled with
+the same image scale, and partial boundary blocks are weighted by valid coverage.
+RGB padding is reset to zero after normalization and photometric augmentation;
+GT and forensic padding are zero. `valid_mask` excludes padding from BCE/Dice
+(including auxiliary loss) and weights classification pooling at encoder resolution.
+Convolutions, attention and normalization still operate on the full square.
+
+Validation and submission share the same inverse: crop to `content_size`, resize
+probabilities to the original dimensions, then binarize. Padding never enters the
+metric area denominator, including the optional resized validation mode. The resize
+mode is saved in the snapshot and automatically restored by submission inference.
+Legacy configs/checkpoints default to `stretch`; changing geometry on resume is rejected.
+
+The model still processes a dense 1024×1024 tensor, so padding does not save FLOPs.
+The counted forward includes the masked classification path; preprocessing,
+restoration, and validation histograms remain outside that count.
+
 ## Submission
 
 From the project root in PowerShell:
@@ -34,12 +138,18 @@ the tuned thresholds in `summary.json`. It writes `submission.csv` and the PNG
 masks under `predictions/`, retaining template paths and original image sizes.
 For the competition archive, zip those two entries at the archive root.
 
+Console output reports configuration/data/checkpoint loading, the selected device
+and thresholds, prediction and PNG saving progress by batch, and the final output
+directory. Progress is printed after the first batch, every 30 seconds, and after
+the last batch, with elapsed time and an estimated remaining time once available.
+
 Use `--data-path` to relocate the dataset, `--template-path` for an explicit
 template, or `--device cpu` to override the saved device. To override the operating
 point, pass all three flags: `--mask-threshold`, `--cls-threshold`, `--min-area`.
 Histogram tuning reports the effective bin boundary used during validation.
-Validation scores use resized targets; final predictions are resized to original
-dimensions before binarization, so their scores need not be identical.
+Legacy validation scores use resized targets; final predictions are resized to
+original dimensions before binarization. Set `eval.resolution: original` for the
+same restoration and thresholding order during model selection.
 
 ## Regression checks
 

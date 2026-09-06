@@ -330,6 +330,7 @@ class Run:
             summary = {f"{name}_best": result.tuned.as_dict()}
             if name == "val":
                 summary.update(best=result.tuned.as_dict(), best_aic=result.tuned.aic)
+                summary["validation_resolution"] = result.resolution
             self.save_summary(summary)
         return oof / f"{name}.npz"
 

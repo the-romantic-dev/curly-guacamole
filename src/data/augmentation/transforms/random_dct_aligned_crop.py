@@ -11,10 +11,12 @@ from src.forensic.dct import crop_fmaps
 
 
 class RandomDCTAlignedCrop(AIIJCAugmentation):
-    def __init__(self, crop_scale_range: tuple[float, float], full_frame: bool):
+    def __init__(self, crop_scale_range: tuple[float, float], full_frame: bool,
+                 foreground_probability: float = 0.0):
         super().__init__()
         self.crop_scale_range = crop_scale_range
         self.full_frame = full_frame
+        self.foreground_probability = foreground_probability
 
     def sample_crop(
             self,
@@ -42,6 +44,14 @@ class RandomDCTAlignedCrop(AIIJCAugmentation):
         fmap = require_fmap(sample)
         height, width = sample.image.shape[:2]
         top, left, side = self.sample_crop(height, width, rng)
+        if (sample.mask is not None and self.foreground_probability > 0
+                and rng.random() < self.foreground_probability):
+            # Only choose pixels reachable by an 8-aligned crop.
+            points = np.argwhere(sample.mask[:align8(height), :align8(width)] > 0.5)
+            if len(points):
+                y, x = points[int(rng.integers(len(points)))]
+                top = self._origin_containing(int(y), height, side, rng)
+                left = self._origin_containing(int(x), width, side, rng)
 
         image = sample.image[top:top + side, left:left + side]
         fmap = crop_fmaps(fmap, top, left, side, side)
@@ -52,3 +62,9 @@ class RandomDCTAlignedCrop(AIIJCAugmentation):
         )
 
         return replace(sample, image=image, mask=mask, fmap=fmap)
+
+    @staticmethod
+    def _origin_containing(pixel: int, length: int, side: int, rng) -> int:
+        first_block = (max(0, pixel - side + 1) + 7) // 8
+        last_block = min(pixel, length - side) // 8
+        return int(rng.integers(first_block, last_block + 1)) * 8

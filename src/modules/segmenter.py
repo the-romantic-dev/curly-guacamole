@@ -61,7 +61,7 @@ class Segmenter(nn.Module):
         """Detached gate statistics for experiment logging."""
         return self.forensic_fusion.gate_stats()
 
-    def forward(self, image, forensic_map=None):
+    def forward(self, image, forensic_map=None, valid_mask=None):
         input_size = image.shape[-2:]
 
         encoder_features = list(
@@ -87,7 +87,7 @@ class Segmenter(nn.Module):
         result = {
             "logits": self._resize(logits, input_size),
             "cls_logits": self.classification_head(
-                encoder_features[-1]
+                encoder_features[-1], valid_mask=valid_mask
             ),
         }
 

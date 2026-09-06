@@ -37,6 +37,7 @@ class EpochTrainResult:
     loss: float
     skipped_steps: int
     seen: int
+    negative_fraction: float = 0.0
 
 
 @dataclass
@@ -57,6 +58,7 @@ class ExperimentRunner:
 
     def run(self) -> Run:
         cfg = self.config
+        self._check_resume_protocol()
         ConsoleProgress.info(f"Эксперимент {cfg.paths.run_name}: device={self.device}, amp={cfg.train.amp}, seed={cfg.seed}")
         set_random_seed(cfg.seed)
 
@@ -67,7 +69,8 @@ class ExperimentRunner:
         ConsoleProgress.info(f"Создание модели {cfg.model.encoder_name}, загрузка pretrained-весов и перенос на {self.device}")
         model = build_model(cfg.model).to(self.device, memory_format=torch.channels_last)
         ConsoleProgress.info("Модель готова; подсчёт GFLOPS")
-        gflops = count_gflops(model, cfg.dataset.image_size)
+        gflops = count_gflops(model, cfg.dataset.image_size,
+                             use_valid_mask=cfg.dataset.resize_mode == "letterbox")
         ConsoleProgress.info(f"Подсчёт завершён: {gflops:.2f} GFLOPS; создание оптимизатора")
         optimizer = build_optimizer(cfg.train, model)
         ConsoleProgress.info(f"Создание DataLoader: batch_size={cfg.train.batch_size}, workers={cfg.train.workers}")
@@ -97,7 +100,12 @@ class ExperimentRunner:
 
         try:
             for epoch in range(state.start_epoch, cfg.train.epochs):
+                train_ds.set_epoch(epoch)
+                train_ds.augmentations.set_epoch(epoch)
+                train_loader.sampler.generator = torch.Generator().manual_seed(cfg.seed + epoch)
                 started = time.time()
+                run.info(f"Полные кадры: p={train_ds.augmentations.full_frame_probability:.2f}; "
+                         f"валидация: {cfg.eval.resolution}")
                 run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение")
                 train_result = train_one_epoch(
                     model=model,
@@ -171,6 +179,25 @@ class ExperimentRunner:
             del model, ema, optimizer, val_loader, train_loader, scaler
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    def _check_resume_protocol(self) -> None:
+        cfg = self.config
+        run_dir = cfg.paths.runs_path / cfg.paths.run_name
+        if not cfg.train.resume or not (run_dir / "ckpt" / "last.pt").exists():
+            return
+        snapshot = Run.open(run_dir).snapshot
+        saved_eval = snapshot.get("eval", snapshot)
+        saved_dataset = snapshot.get("dataset", snapshot)
+        if saved_dataset.get("resize_mode", "stretch") != cfg.dataset.resize_mode:
+            raise ValueError("Cannot resume with a different dataset.resize_mode; choose a new run_name")
+        if saved_eval.get("resolution", "resized") != cfg.eval.resolution:
+            raise ValueError("Cannot resume with a different eval.resolution; choose a new run_name")
+        saved_aug = snapshot.get("augmentation", snapshot)
+        for key, default in (("full_frame_probability", 0.0),
+                             ("foreground_crop_probability", 0.0),
+                             ("final_full_frame_epochs", 0)):
+            if saved_aug.get(key, default) != getattr(cfg.augmentation, key):
+                raise ValueError(f"Cannot resume with a different augmentation.{key}; choose a new run_name")
 
     def _split_data(self):
         cfg = self.config
@@ -257,6 +284,7 @@ class ExperimentRunner:
             {
                 "samples": seen_total,
                 "train/loss": train_result.loss,
+                "train/negative_fraction": train_result.negative_fraction,
                 "train/lr": optimizer.param_groups[0]["lr"],
                 "train/skipped_steps": train_result.skipped_steps,
                 "train/fmap_gamma": model.forensic_gate_stats()["max_abs"],
@@ -289,6 +317,7 @@ class ExperimentRunner:
                 "samples": state.seen_total,
                 "gflops": round(gflops, 1),
                 "within_limit": gflops <= 100,
+                "validation_resolution": self.config.eval.resolution,
             }
         )
 
@@ -309,6 +338,7 @@ def train_one_epoch(
     skipped_steps = 0
     total_loss = 0.0
     seen = 0
+    negatives = torch.zeros((), device=device)
     total_batches = len(loader) if isinstance(loader, Sized) else None
     optimizer.zero_grad(set_to_none=True)
 
@@ -317,8 +347,9 @@ def train_one_epoch(
         images = batch["image"].to(memory_format=torch.channels_last)
 
         with amp.autocast():
+            model_kwargs = {"valid_mask": batch["valid_mask"]} if "valid_mask" in batch else {}
             loss = compute_loss(
-                model(images, batch.get("fmap")),
+                model(images, batch.get("fmap"), **model_kwargs),
                 batch,
                 config.model.aux_weight,
             )
@@ -339,6 +370,7 @@ def train_one_epoch(
             scheduler.step()
 
         batch_size = images.size(0)
+        negatives += (batch["label"] <= 0.5).sum()
         total_loss += float(loss.detach()) * batch_size
         seen += batch_size
 
@@ -346,6 +378,7 @@ def train_one_epoch(
         loss=total_loss / max(1, seen),
         skipped_steps=skipped_steps,
         seen=seen,
+        negative_fraction=float(negatives) / max(1, seen),
     )
 
 
