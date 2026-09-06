@@ -1,12 +1,12 @@
 # Декодеры
 
-Локальный пакет с API в духе timm. Встроены `unet` и `segformer`;
+Локальный пакет с API в духе timm. Встроены `unet`, `segformer` и `emcad`;
 предобученных весов декодеров нет.
 
 ```python
 from src.decoders import create_decoder, list_decoders, is_decoder
 
-list_decoders()       # ['segformer', 'unet']
+list_decoders()       # ['emcad', 'segformer', 'unet']
 list_decoders('seg*') # ['segformer']
 
 decoder = create_decoder(
@@ -54,8 +54,8 @@ model:
 
 ## Добавление декодера
 
-1. Создать модуль, например `src/decoders/emcad.py`.
-2. Унаследовать класс от `Decoder` и добавить `@register_decoder('emcad')`.
+1. Создать модуль, например `src/decoders/my_decoder.py`.
+2. Унаследовать класс от `Decoder` и добавить `@register_decoder('my_decoder')`.
 3. Импортировать модуль в `src/decoders/__init__.py` для регистрации во всех
    процессах обучения и инференса. Для внешнего плагина достаточно импортировать
    его до вызова `create_decoder` в каждом процессе.
@@ -80,3 +80,37 @@ Segmenter самостоятельно строит mask head, увеличив�
 bilinear resize к самому подробному масштабу, concat и 1×1 fusion с norm/ReLU.
 Дополнительная голова обучается на самой подробной проекции до fusion.
 U-Net сохраняет последовательный upsampling и skip connections baseline.
+
+## Эксперимент EMCAD
+
+Конфигурация: `configs/emcad_mixed_original.yaml`, запуск:
+`notebooks/emcad_mixed_original.ipynb`.
+
+```yaml
+  decoder_name: emcad
+  decoder_kwargs:
+    kernel_sizes: [1, 3, 5]
+    expansion_factor: 2
+    lgag_kernel_size: 3
+    activation: relu
+```
+
+Архитектура из [EMCAD, CVPR 2024](https://arxiv.org/abs/2405.06880):
+channel/spatial attention, параллельные depthwise-свёртки с суммированием,
+channel shuffle, residual, efficient upsampling и grouped attention gates
+на skip connections. Spatial attention разделяет веса между четырьмя стадиями.
+Требуются четыре уровня с шагами `[4, 8, 16, 32]` и чётным числом каналов.
+
+Адаптация сохраняет каналы энкодера и выдаёт признаки на шаге 4.
+Auxiliary head с весом 0.4 получает объединённые признаки перед последним
+refinement. Используется одна основная mask head, существующая classification
+head и loss проекта. Multi-head supervision авторов не воспроизводится.
+Инициализация — стандартная PyTorch, upsampling явно задаёт размер skip,
+что поддерживает нечётные размеры признаков. Это эксперимент с архитектурой
+EMCAD в baseline, а не воспроизведение результатов статьи.
+
+Для сверки архитектуры использован
+[репозиторий авторов](https://github.com/SLDGroup/EMCAD).
+Его исходный код распространяется под UT Austin Research License,
+а не MIT/Apache; здесь нет зависимости от установки этого репозитория
+или загрузки его обученных моделей.

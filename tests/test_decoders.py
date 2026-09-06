@@ -5,7 +5,7 @@ import torch
 def test_registry_discovery_and_errors():
     from src.decoders import create_decoder, is_decoder, list_decoders
 
-    assert list_decoders() == ['segformer', 'unet']
+    assert list_decoders() == ['emcad', 'segformer', 'unet']
     assert list_decoders('seg*') == ['segformer']
     assert is_decoder('unet')
     with pytest.raises(ValueError, match='Unknown decoder'):

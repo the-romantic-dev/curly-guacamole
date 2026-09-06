@@ -4,6 +4,7 @@ from .base import Decoder
 from .registry import create_decoder, is_decoder, list_decoders, register_decoder
 from .unet import UNetDecoder
 from .segformer import SegFormerDecoder
+from .emcad import EMCADDecoder
 
 __all__ = ['Decoder', 'create_decoder', 'is_decoder', 'list_decoders',
-           'register_decoder', 'UNetDecoder', 'SegFormerDecoder']
+           'register_decoder', 'UNetDecoder', 'SegFormerDecoder', 'EMCADDecoder']
