@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import cv2
 import numpy as np
 import torch
+from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from src.config import ExperimentConfig, ModelConfig, TrainConfig
@@ -16,6 +19,19 @@ from src.data.dataset import AIIJCDataset
 
 if TYPE_CHECKING:
     from src.modules.segmenter import Segmenter
+
+
+class DataLoaderThreadLimits:
+    """Keep CPU libraries single-threaded in the parent and loader workers."""
+
+    @staticmethod
+    def apply(worker_id: int | None = None) -> None:
+        for variable in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
+            os.environ[variable] = "1"
+        cv2.setNumThreads(1)
+        torch.set_num_threads(1)
+        # Also limit libraries already imported by a notebook or forked worker.
+        threadpool_limits(limits=1)
 
 
 @dataclass(frozen=True)
@@ -115,6 +131,7 @@ def build_loaders(
     train_ds: AIIJCDataset,
     val_ds: AIIJCDataset,
 ) -> tuple[DataLoader, DataLoader]:
+    DataLoaderThreadLimits.apply()
     pin_memory = torch.device(config.device).type == "cuda"
     train_loader = DataLoader(
         train_ds,
@@ -124,6 +141,7 @@ def build_loaders(
         num_workers=config.workers,
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
+        worker_init_fn=DataLoaderThreadLimits.apply,
     )
     val_loader = DataLoader(
         val_ds,
@@ -132,6 +150,7 @@ def build_loaders(
         num_workers=config.workers,
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
+        worker_init_fn=DataLoaderThreadLimits.apply,
         collate_fn=ValidationCollator(),
     )
     return train_loader, val_loader
