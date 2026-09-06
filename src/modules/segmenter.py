@@ -4,7 +4,7 @@ from torch import nn
 from src.forensic.dct.constants import CHANNEL_COUNT, STRIDE
 from src.modules.forensic_fusion import ForensicFusion
 from src.modules.gate_head import GateHead
-from src.modules.unet_decoder import UNetDecoder
+from src.decoders import create_decoder
 from src.modules.utils import build_timm_encoder
 
 
@@ -22,6 +22,9 @@ class Segmenter(nn.Module):
         aux_weight=0.0,
         *,
         pretrained=True,
+        decoder_name="unet",
+        decoder_embed_dim=128,
+        decoder_kwargs=None,
     ):
         super().__init__()
 
@@ -35,20 +38,24 @@ class Segmenter(nn.Module):
             forensic_channels,
         )
 
-        self.decoder = UNetDecoder(
-            encoder_strides=self.strides,
-            encoder_channels=self.channels,
-            decoder_channels=decoder_channels,
-            norm=norm,
-            aux_stage=2,
-            use_aux=aux_weight > 0,
+        # Legacy arguments remain valid for existing notebooks and snapshots.
+        options = {
+            "unet": {"decoder_channels": decoder_channels},
+            "segformer": {"embed_dim": decoder_embed_dim},
+        }.get(decoder_name, {})
+        options.update(decoder_kwargs or {})
+        self.decoder = create_decoder(
+            decoder_name, encoder_channels=self.channels,
+            encoder_strides=self.strides, norm=norm,
+            use_aux=aux_weight > 0, **options,
         )
 
+        head_kernel = self.decoder.head_kernel_size
         self.segmentation_head = nn.Conv2d(
             self.decoder.out_channels,
             1,
-            kernel_size=3,
-            padding=1,
+            kernel_size=head_kernel,
+            padding=head_kernel // 2,
         )
 
         self.classification_head = GateHead(

@@ -65,6 +65,9 @@ def build_model(config: ModelConfig, *, pretrained: bool = True) -> Segmenter:
         norm=config.norm,
         aux_weight=config.aux_weight,
         pretrained=pretrained,
+        decoder_name=config.decoder_name,
+        decoder_embed_dim=config.decoder_embed_dim,
+        decoder_kwargs=config.decoder_kwargs,
     )
 
 

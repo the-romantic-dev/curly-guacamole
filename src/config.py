@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -43,24 +43,38 @@ class ModelConfig:
     forensic_channels: tuple[int, ...]
     aux_weight: float
     norm: str
+    decoder_name: str = "unet"
+    decoder_embed_dim: int = 128
+    decoder_kwargs: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ModelConfig:
         data = _mapping(data, "model")
         _check_keys(
             data,
-            {"encoder_name", "decoder_channels", "forensic_channels", "aux_weight", "norm"},
+            {"encoder_name", "forensic_channels", "aux_weight", "norm"},
             "model",
+            optional={"decoder_name", "decoder_channels", "decoder_embed_dim", "decoder_kwargs"},
         )
         config = cls(
             encoder_name=_non_empty_str(_required(data, "encoder_name", "model"), "model.encoder_name"),
-            decoder_channels=_int_tuple(_required(data, "decoder_channels", "model"), "model.decoder_channels"),
+            decoder_channels=_int_tuple(data.get("decoder_channels", (128, 64, 32, 16, 16)), "model.decoder_channels"),
             forensic_channels=_int_tuple(_required(data, "forensic_channels", "model"), "model.forensic_channels"),
             aux_weight=float(_required(data, "aux_weight", "model")),
             norm=_non_empty_str(_required(data, "norm", "model"), "model.norm"),
+            decoder_name=str(data.get("decoder_name", "unet")),
+            decoder_embed_dim=int(data.get("decoder_embed_dim", 128)),
+            decoder_kwargs=dict(_mapping(data.get("decoder_kwargs", {}), "model.decoder_kwargs")),
         )
         if not config.decoder_channels:
             raise ValueError("model.decoder_channels must not be empty")
+        if not config.decoder_name.strip():
+            raise ValueError("model.decoder_name must not be empty")
+        reserved = {"encoder_channels", "encoder_strides", "norm", "use_aux"}
+        if reserved.intersection(config.decoder_kwargs):
+            raise ValueError("model.decoder_kwargs must not override encoder metadata, norm or use_aux")
+        if config.decoder_embed_dim <= 0:
+            raise ValueError("model.decoder_embed_dim must be positive")
         if len(config.forensic_channels) != 3:
             raise ValueError("model.forensic_channels must contain exactly 3 values")
         if config.aux_weight < 0:
@@ -76,6 +90,9 @@ class ModelConfig:
             "forensic_channels": self.forensic_channels,
             "aux_weight": self.aux_weight,
             "norm": self.norm,
+            "decoder_name": self.decoder_name,
+            "decoder_embed_dim": self.decoder_embed_dim,
+            "decoder_kwargs": dict(self.decoder_kwargs),
         }
 
 

@@ -92,7 +92,9 @@ class InferenceConfig:
         return cls(
             ModelConfig.from_dict({key: model[key] for key in (
                 "encoder_name", "decoder_channels", "forensic_channels", "aux_weight", "norm",
-            )}),
+                "decoder_name", "decoder_embed_dim",
+                "decoder_kwargs",
+            ) if key in model}),
             int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
             str(dataset.get("resize_mode", "stretch")),
