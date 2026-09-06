@@ -342,7 +342,9 @@ def train_one_epoch(
     total_batches = len(loader) if isinstance(loader, Sized) else None
     optimizer.zero_grad(set_to_none=True)
 
-    for step, batch in enumerate(ConsoleProgress.iterate(loader, "Обучение, батчи")):
+    for step, batch in enumerate(ConsoleProgress.iterate(
+        loader, "Обучение, батчи", image_count=lambda batch: len(batch["image"])
+    )):
         batch = _move_batch_to_device(batch, device)
         images = batch["image"].to(memory_format=torch.channels_last)
 
