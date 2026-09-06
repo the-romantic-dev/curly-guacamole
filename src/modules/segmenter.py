@@ -22,6 +22,8 @@ class Segmenter(nn.Module):
         aux_weight=0.0,
         *,
         pretrained=True,
+        use_forensics=True,
+        dct_aux_weight=0.0,
         decoder_name="unet",
         decoder_embed_dim=128,
         decoder_kwargs=None,
@@ -32,11 +34,14 @@ class Segmenter(nn.Module):
             encoder_name, pretrained=pretrained
         )
 
+        if dct_aux_weight > 0 and not use_forensics:
+            raise ValueError("DCT auxiliary head requires use_forensics")
         self.forensic_fusion = ForensicFusion(
             self.strides,
             self.channels,
             forensic_channels,
-        )
+            use_aux=dct_aux_weight > 0,
+        ) if use_forensics else None
 
         # Legacy arguments remain valid for existing notebooks and snapshots.
         options = {
@@ -66,7 +71,7 @@ class Segmenter(nn.Module):
 
     def forensic_gate_stats(self) -> dict[str, float]:
         """Detached gate statistics for experiment logging."""
-        return self.forensic_fusion.gate_stats()
+        return self.forensic_fusion.gate_stats() if self.forensic_fusion is not None else {"max_abs": 0.0}
 
     def forward(self, image, forensic_map=None, valid_mask=None):
         input_size = image.shape[-2:]
@@ -75,13 +80,16 @@ class Segmenter(nn.Module):
             self.encoder(image)
         )
 
-        if forensic_map is None:
-            forensic_map = self._empty_forensic_map(image)
-
-        encoder_features = self.forensic_fusion(
-            encoder_features,
-            forensic_map,
-        )
+        dct_aux_logits = None
+        if self.forensic_fusion is not None:
+            if forensic_map is None:
+                forensic_map = self._empty_forensic_map(image)
+            if self.training:
+                encoder_features, dct_aux_logits = self.forensic_fusion(
+                    encoder_features, forensic_map, return_aux=True,
+                )
+            else:
+                encoder_features = self.forensic_fusion(encoder_features, forensic_map)
 
         decoder_features, aux_logits = self.decoder(
             encoder_features
@@ -104,6 +112,8 @@ class Segmenter(nn.Module):
                 input_size,
             )
 
+        if dct_aux_logits is not None:
+            result["dct_aux_logits"] = dct_aux_logits
         return result
 
     def _empty_forensic_map(self, image):

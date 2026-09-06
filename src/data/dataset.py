@@ -38,12 +38,14 @@ class AIIJCDataset(Dataset):
             mode: Literal["train", "val", "test"] | None = None,
             original_targets: bool = False,
             resize_mode: str = "stretch",
+            use_forensics: bool = True,
     ):
         super().__init__()
         self.data_workspace = data_workspace
         self.mode = self._resolve_mode(train, mode)
         self.train = self.mode == "train"
         self.has_targets = self.mode in {"train", "val"}
+        self.use_forensics = use_forensics
         self.image_size = image_size
         self.seed = seed
         self.original_targets = original_targets
@@ -78,7 +80,7 @@ class AIIJCDataset(Dataset):
         sample = DataSample(
             image=image,
             mask=self.load_mask(row, original_size) if self.has_targets else None,
-            qtable=luma_qtable(image_path),
+            qtable=luma_qtable(image_path) if self.use_forensics else None,
         )
         rng = self._make_rng(index)
         original_mask = sample.mask if self.original_targets else None
@@ -87,11 +89,19 @@ class AIIJCDataset(Dataset):
 
         # Recompression must precede DCT extraction; maps use the full frame before crop.
         sample = self._augment(AugmentationStage.BEFORE_FORENSICS, sample, rng)
-        sample = replace(sample, fmap=forensic_maps(sample.image, sample.qtable))
+        if self.use_forensics:
+            fmap = forensic_maps(sample.image, sample.qtable)
+        else:
+            # Keep the same crop/resize geometry without extracting DCT features.
+            h, w = sample.image.shape[:2]
+            fmap = np.zeros((1, h // 8, w // 8), dtype=np.float32)
+        sample = replace(sample, fmap=fmap)
         sample = self._augment(AugmentationStage.AFTER_FORENSICS, sample, rng)
         sample = self.preprocessor.resize(sample)
         sample = self._augment(AugmentationStage.FINAL, sample, rng)
         output = self.preprocessor.to_output(sample)
+        if not self.use_forensics:
+            output.pop("fmap")
         if original_mask is not None:
             if original_mask.shape != original_size:
                 raise ValueError("original validation mask must match the image size")

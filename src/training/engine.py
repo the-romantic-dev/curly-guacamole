@@ -354,6 +354,7 @@ def train_one_epoch(
                 model(images, batch.get("fmap"), **model_kwargs),
                 batch,
                 config.model.aux_weight,
+                dct_aux_weight=config.model.dct_aux_weight,
             )
 
         scaler.scale(loss / config.train.accum_steps).backward()

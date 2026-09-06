@@ -93,7 +93,7 @@ class InferenceConfig:
             ModelConfig.from_dict({key: model[key] for key in (
                 "encoder_name", "decoder_channels", "forensic_channels", "aux_weight", "norm",
                 "decoder_name", "decoder_embed_dim",
-                "decoder_kwargs",
+                "decoder_kwargs", "use_forensics", "dct_aux_weight",
             ) if key in model}),
             int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
@@ -130,7 +130,8 @@ def create_submission(
     template = pd.read_csv(template_path or workspace.test_root / "submission.csv")
     writer = SubmissionWriter(template, test_rows, output_dir)
     dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed,
-                           mode="test", resize_mode=config.resize_mode)
+                           mode="test", resize_mode=config.resize_mode,
+                           use_forensics=config.model.use_forensics)
     inference_device = torch.device(device or config.device)
     ConsoleProgress.info(
         f"Submission: изображений {len(test_rows)}, устройство {inference_device}, "

@@ -10,7 +10,7 @@ class ForensicFusion(nn.Module):
 
     FUSION_STRIDES = (8, 16, 32)
 
-    def __init__(self, encoder_strides, encoder_channels, forensic_channels):
+    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False):
         super().__init__()
 
         if len(encoder_strides) != len(encoder_channels):
@@ -36,6 +36,8 @@ class ForensicFusion(nn.Module):
             channels=forensic_channels,
         )
 
+        self.aux_head = nn.Conv2d(forensic_channels[0], 1, 1) if use_aux else None
+
         self.fusion_blocks = nn.ModuleDict({
             str(stride): GatedFuse(
                 encoder_channels[encoder_strides.index(stride)],
@@ -52,7 +54,7 @@ class ForensicFusion(nn.Module):
             )
         }
 
-    def forward(self, encoder_features, forensic_map):
+    def forward(self, encoder_features, forensic_map, *, return_aux=False):
         forensic_features = self.branch(forensic_map)
 
         for stride in self.FUSION_STRIDES:
@@ -63,4 +65,7 @@ class ForensicFusion(nn.Module):
                 forensic_features[stride],
             )
 
+        if return_aux:
+            aux = self.aux_head(forensic_features[8]) if self.aux_head is not None else None
+            return encoder_features, aux
         return encoder_features

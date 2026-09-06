@@ -20,7 +20,7 @@ def bce_loss(logits, targets, valid_mask=None):
         return (weighted / valid_mask.flatten(1).sum(1).clamp_min(1)).mean()
     return F.binary_cross_entropy_with_logits(logits, targets)
 
-def compute_loss(out, batch, aux_weight: float = 0.0):
+def compute_loss(out, batch, aux_weight: float = 0.0, dct_aux_weight: float = 0.0):
     """BCE + Dice по маске, BCE по гейту, плюс глубокая супервизия на страйде 4.
 
     Без последнего слагаемого голова aux4 не получает градиента вообще — она
@@ -36,5 +36,20 @@ def compute_loss(out, batch, aux_weight: float = 0.0):
         total = total + aux_weight * (
             bce_loss(out["aux_logits"], batch["mask"], valid_mask=valid)
             + soft_dice_loss(out["aux_logits"], batch["mask"], valid_mask=valid)
+        )
+    if dct_aux_weight > 0:
+        logits = out["dct_aux_logits"]
+        size = logits.shape[-2:]
+        target = batch["mask"]
+        aux_valid = None
+        if valid is not None:
+            aux_valid = F.interpolate(valid.float(), size=size, mode="area")
+            target = F.interpolate(target * valid, size=size, mode="area")
+            target = target / aux_valid.clamp_min(1e-6)
+        else:
+            target = F.interpolate(target, size=size, mode="area")
+        total = total + dct_aux_weight * (
+            bce_loss(logits, target, valid_mask=aux_valid)
+            + soft_dice_loss(logits, target, valid_mask=aux_valid)
         )
     return total

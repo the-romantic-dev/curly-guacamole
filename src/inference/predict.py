@@ -44,7 +44,7 @@ class Predictor:
                           if "valid_mask" in batch else {})
                 output = self.model(
                     batch["image"].to(self.amp.device),
-                    batch["fmap"].to(self.amp.device),
+                    batch["fmap"].to(self.amp.device) if "fmap" in batch else None,
                     **kwargs,
                 )
                 probabilities = output["logits"].float().sigmoid()
