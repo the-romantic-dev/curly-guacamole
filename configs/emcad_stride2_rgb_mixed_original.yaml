@@ -5,3 +5,6 @@ model:
   decoder_kwargs:
     rgb_refinement_channels: 32
     rgb_detail_channels: 24
+train:
+  batch_size: 2
+  accum_steps: 8

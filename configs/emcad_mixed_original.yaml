@@ -12,4 +12,4 @@ model:
     lgag_kernel_size: 3
     activation: relu
 train:
-  resume: false
+  resume: true
