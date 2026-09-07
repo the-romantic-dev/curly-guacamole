@@ -1,0 +1,14 @@
+---
+run: pvt_v2_b2_full_frame
+series: pvt
+baseline:
+verdict: inconclusive
+source:
+parent: null
+change: null
+leaderboard_score: null
+---
+
+**Что проверяли.** Обычный запуск текущего бейзлайна с pvt_v2_b2 в качестве энекодера на разрешении 640px + форензик ветка с DCT фичами и U-Net декодер
+
+**Что получилось.** Бейзлайн результат

@@ -23,6 +23,9 @@ env/
 
 # Project artifacts
 runs/*
+!runs/*/
+runs/*/*
+!runs/*/notes.md
 !runs/.gitkeep
 !runs/__init__.py
 *.pt
@@ -34,4 +37,3 @@ runs/*
 submissions/
 submission.zip
 predictions/
-

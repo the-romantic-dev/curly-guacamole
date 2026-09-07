@@ -1,8 +1,7 @@
 """Карточка прогона: смысл эксперимента рядом с его числами.
 
-Метрик здесь нет намеренно. Единственный источник чисел — `summary.json`;
-карточка отвечает за «что проверяли» и «что из этого следует». Разъехаться им
-негде: карточка лежит внутри папки прогона, а папка после завершения не меняется.
+Локальные метрики хранятся в `summary.json`. Карточка хранит связи запусков,
+описание гипотезы и вручную внесённый leaderboard_score.
 
 Модуль ничего не знает ни про torch, ни про способ обучения: он разбирает
 markdown с YAML-шапкой и проверяет, что обязательные поля на месте.
@@ -40,7 +39,7 @@ _FRONT_MATTER = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n?(.*)\Z", re.DOTALL)
 
 @dataclass(frozen=True)
 class Notes:
-    """Разобранная карточка. Числа сюда не попадают и попасть не могут."""
+    """Карточка с эффективным baseline: явное значение либо parent."""
 
     run: str
     series: str
@@ -49,6 +48,9 @@ class Notes:
     source: str | None
     covers: tuple[str, ...]
     body: str
+    parent: str | None = None
+    change: str | None = None
+    leaderboard_score: float | None = None
 
     @property
     def headline(self) -> str:
@@ -100,14 +102,25 @@ def parse_notes(text: str, *, expected_run: str | None = None) -> Notes:
             f"одно из двух переименовано"
         )
 
+    parent = _run_reference(head.get("parent"), "parent")
+    baseline = _run_reference(head.get("baseline"), "baseline") or parent
+    score = head.get("leaderboard_score")
+    if score is not None:
+        if isinstance(score, bool) or not isinstance(score, (int, float)) or not 0 <= score <= 1:
+            raise ValueError("leaderboard_score должен быть числом от 0 до 1 или null")
+        score = float(score)
+
     return Notes(
         run=run,
         series=str(head["series"]),
         verdict=verdict,
-        baseline=_optional(head.get("baseline")),
+        baseline=baseline,
         source=_optional(head.get("source")),
         covers=tuple(str(item) for item in (head.get("covers") or ())),
         body=body.strip(),
+        parent=parent,
+        change=_optional(head.get("change")),
+        leaderboard_score=score,
     )
 
 
@@ -125,7 +138,10 @@ def notes_template(run_name: str) -> str:
         "---\n"
         f"run: {run_name}\n"
         f"series: {series_of(run_name)}\n"
-        "baseline:\n"
+        "parent: null\n"
+        "baseline: null  # если пусто, используется parent\n"
+        "change: null\n"
+        "leaderboard_score: null\n"
         "verdict: inconclusive\n"
         "source:\n"
         "---\n"
@@ -142,6 +158,12 @@ def notes_template(run_name: str) -> str:
 def _optional(value: Any) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
+
+
+def _run_reference(value: Any, field: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        raise ValueError(f"{field} должен быть одним именем прогона или null")
+    return _optional(value)
 
 
 def _paragraph(body: str, marker: str) -> str | None:

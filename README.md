@@ -151,6 +151,44 @@ Legacy validation scores use resized targets; final predictions are resized to
 original dimensions before binarization. Set `eval.resolution: original` for the
 same restoration and thresholding order during model selection.
 
+## Experiment history
+
+Open `notebooks/experiments.ipynb` to view the experiment tree and results table.
+Edit the YAML header in `runs/<run_name>/notes.md` by hand:
+
+```yaml
+parent: pvt_v2_b2_mixed_original
+baseline: null
+change: "Replaced the decoder with SegFormer"
+leaderboard_score: null
+```
+
+`parent` is the experiment this run was derived from, not an instruction to load
+weights. A missing, empty or null `baseline` defaults to `parent`; set another
+single run name to override it. References use run directory names. Root runs
+leave `parent` empty. Existing baseline-only cards keep their meaning.
+Replace `leaderboard_score: null` with a number from 0 to 1 after scoring.
+No private score or submission metadata is required.
+
+Cards are tracked by Git; training artifacts remain ignored. Existing cards are
+never overwritten by training. New runs receive the expanded template automatically.
+Local metrics still come from `summary.json`. The registry reports missing links,
+cycles and malformed records without changing run files. Recreate the registry
+or rerun the notebook after edits. Runs without cards remain visible.
+
+```python
+from src.training.experiments import ExperimentRegistry
+
+registry = ExperimentRegistry("runs")
+print(registry.tree())
+print(registry.table())
+print(registry.issues)
+```
+
+Compare validation scores only on matching validation rows and evaluation
+protocols; in particular, resized and original-resolution AIC are not directly
+comparable. The overview does not calculate automatic score differences.
+
 ## Regression checks
 
 ```powershell
