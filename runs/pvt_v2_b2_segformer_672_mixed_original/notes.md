@@ -6,7 +6,7 @@ verdict: inconclusive
 source:
 parent: null
 change: null
-leaderboard_score: null
+leaderboard_score: 0.8976302931446398
 ---
 
 **Что проверяли.** ЗАПОЛНИТЬ: ровно одно отличие от baseline, одним предложением.

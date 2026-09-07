@@ -1,6 +1,4 @@
 paths:
-  data_path: D:/Challenges/AIIJC2026/data
-  runs_path: ../runs
   run_name: efficientvit_b2_1024_mixed_original
 
 seed: 42

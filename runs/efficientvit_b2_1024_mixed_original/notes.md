@@ -2,10 +2,10 @@
 run: efficientvit_b2_1024_mixed_original
 series: efficientvit
 baseline:
-verdict: inconclusive
+verdict: null
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_mixed_original
+change: "Заменил энекодер на легкий EfficientViT B2 и подавал туда изображения с 1024 px рейсайзом"
 leaderboard_score: null
 ---
 

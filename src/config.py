@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from dotenv import dotenv_values
 
+import global_config
 from src.data.augmentation.base import AugmentationConfig
 from src.training.metric import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
 
@@ -21,10 +23,12 @@ class PathsConfig:
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], *, base_dir: Path) -> PathsConfig:
         data = _mapping(data, "paths")
-        _check_keys(data, {"data_path", "runs_path", "run_name"}, "paths")
+        # Accept old snapshots, but resolve storage for the current machine.
+        _check_keys(data, {"run_name"}, "paths", optional={"data_path", "runs_path"})
+        settings = {**dotenv_values(global_config.PROJECT_ROOT / ".env"), **os.environ}
         return cls(
-            data_path=_path(_required(data, "data_path", "paths"), base_dir),
-            runs_path=_path(_required(data, "runs_path", "paths"), base_dir),
+            data_path=_path(settings.get("AIIJC_DATA_PATH") or global_config.DATA_PATH, global_config.PROJECT_ROOT),
+            runs_path=_path(settings.get("AIIJC_RUNS_PATH") or global_config.RUNS_PATH, global_config.PROJECT_ROOT),
             run_name=_non_empty_str(_required(data, "run_name", "paths"), "paths.run_name"),
         )
 

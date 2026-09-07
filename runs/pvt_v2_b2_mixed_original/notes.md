@@ -4,9 +4,9 @@ series: pvt
 baseline:
 verdict: inconclusive
 source:
-parent: null
-change: null
-leaderboard_score: null
+parent: pvt_v2_b2_full_frame
+change: "Добавил обучение 50/50 с full frame изображениями без кропа + 2 последние эпохи дотюна на 100% full_frame"
+leaderboard_score: 0.9196535516677115
 ---
 
 **Что проверяли.** ЗАПОЛНИТЬ: ровно одно отличие от baseline, одним предложением.

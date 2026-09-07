@@ -12,6 +12,7 @@ dependencies:
   - pillow
   - scikit-learn
   - pyyaml
+  - python-dotenv
   - pyarrow
   - pytest
   - ruff

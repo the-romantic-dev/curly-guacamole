@@ -5,7 +5,82 @@ import pytest
 from src.config import ExperimentConfig, load_experiment_config
 
 
-def test_load_baseline_config():
+def test_portable_config_uses_machine_paths(tmp_path, monkeypatch):
+    import yaml
+
+    raw = load_experiment_config("configs/baseline.yaml").to_dict()
+    raw["paths"] = {"run_name": "portable"}
+    config_path = tmp_path / "experiment.yaml"
+    config_path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    for machine in ("local", "server"):
+        data_path = tmp_path / machine / "data"
+        runs_path = tmp_path / machine / "runs"
+        monkeypatch.setenv("AIIJC_DATA_PATH", str(data_path))
+        monkeypatch.setenv("AIIJC_RUNS_PATH", str(runs_path))
+        config = load_experiment_config(config_path)
+        assert config.paths.data_path == data_path
+        assert config.paths.runs_path == runs_path
+        assert config.paths.run_name == "portable"
+
+
+def test_saved_paths_do_not_override_machine_settings(tmp_path, monkeypatch):
+    raw = load_experiment_config("configs/baseline.yaml").to_dict()
+    monkeypatch.setenv("AIIJC_DATA_PATH", str(tmp_path / "data"))
+    monkeypatch.setenv("AIIJC_RUNS_PATH", str(tmp_path / "runs"))
+    config = ExperimentConfig.from_dict(raw)
+    assert config.paths.data_path == tmp_path / "data"
+    assert config.paths.runs_path == tmp_path / "runs"
+
+
+def test_machine_defaults_are_independent_of_yaml_location_and_cwd(tmp_path, monkeypatch):
+    import global_config
+
+    raw = load_experiment_config("configs/baseline.yaml").to_dict()
+    raw["paths"] = {"run_name": "portable"}
+    monkeypatch.delenv("AIIJC_DATA_PATH", raising=False)
+    monkeypatch.delenv("AIIJC_RUNS_PATH", raising=False)
+    monkeypatch.setattr(global_config, "DATA_PATH", "data")
+    monkeypatch.setattr(global_config, "RUNS_PATH", "runs")
+    monkeypatch.setattr(global_config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.chdir(tmp_path)
+    config = ExperimentConfig.from_dict(raw, base_dir=tmp_path)
+    assert config.paths.data_path == global_config.PROJECT_ROOT / "data"
+    assert config.paths.runs_path == global_config.PROJECT_ROOT / "runs"
+
+
+def test_experiment_yamls_have_no_machine_paths():
+    import yaml
+
+    for path in Path("configs").glob("*.yaml"):
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert set(raw["paths"]) == {"run_name"}, path
+        load_experiment_config(path)
+
+
+def test_dotenv_paths_reload_and_environment_takes_priority(tmp_path, monkeypatch):
+    import global_config
+
+    config_path = Path("configs/baseline.yaml").resolve()
+    monkeypatch.setattr(global_config, "PROJECT_ROOT", tmp_path)
+    monkeypatch.delenv("AIIJC_DATA_PATH", raising=False)
+    monkeypatch.delenv("AIIJC_RUNS_PATH", raising=False)
+    dotenv = tmp_path / ".env"
+    dotenv.write_text('AIIJC_DATA_PATH="my data"\nAIIJC_RUNS_PATH=outputs\n', encoding="utf-8")
+    config = load_experiment_config(config_path)
+    assert config.paths.data_path == tmp_path / "my data"
+    assert config.paths.runs_path == tmp_path / "outputs"
+    dotenv.write_text("AIIJC_DATA_PATH=new_data\n", encoding="utf-8")
+    monkeypatch.setenv("AIIJC_RUNS_PATH", str(tmp_path / "override"))
+    config = load_experiment_config(config_path)
+    assert config.paths.data_path == tmp_path / "new_data"
+    assert config.paths.runs_path == tmp_path / "override"
+
+
+def test_load_baseline_config(monkeypatch):
+    monkeypatch.setenv("AIIJC_DATA_PATH", "D:/Challenges/AIIJC2026/data")
+    monkeypatch.setenv("AIIJC_RUNS_PATH", str(Path("runs").resolve()))
     config = load_experiment_config("configs/baseline.yaml")
 
     assert config.paths.data_path == Path("D:/Challenges/AIIJC2026/data")
@@ -61,4 +136,3 @@ def test_invalid_config_value_fails_early():
 
     with pytest.raises(ValueError, match="train.amp"):
         ExperimentConfig.from_dict(raw, base_dir=Path("configs"))
-

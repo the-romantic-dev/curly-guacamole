@@ -199,3 +199,24 @@ The suite covers configuration, factories, training state, validation, dataset
 modes and paths, DCT shapes, synchronized augmentation, model forward, and
 template-aligned submission. Tests use synthetic inputs and mocked encoders, with
 no training dataset or pretrained weight download required.
+## Storage paths
+
+Experiment YAML files only specify `paths.run_name`. Copy `.env.example` to
+`.env` in the project root and set `AIIJC_DATA_PATH` and `AIIJC_RUNS_PATH` once
+per machine. `.env` is ignored by Git; `.env.example` is the shared template.
+The file is read each time an experiment config is loaded, including in notebooks.
+Environment variables override `.env`; missing or empty values default to
+the project's `data/` and `runs/` directories.
+Relative storage paths resolve from the project root, regardless of the
+working directory or YAML location.
+
+For example, a server's `.env`:
+
+```dotenv
+AIIJC_DATA_PATH=/mnt/datasets/aiijc
+AIIJC_RUNS_PATH=/mnt/experiments/aiijc
+```
+
+The same YAML and notebook work on both machines. Runtime snapshots retain
+the resolved paths for reference; loading an old experiment YAML ignores its
+stored `data_path` and `runs_path` in favor of the current machine settings.

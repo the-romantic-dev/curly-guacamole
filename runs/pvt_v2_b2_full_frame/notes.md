@@ -6,7 +6,7 @@ verdict: inconclusive
 source:
 parent: null
 change: null
-leaderboard_score: null
+leaderboard_score: 0.8654487985760507
 ---
 
 **Что проверяли.** Обычный запуск текущего бейзлайна с pvt_v2_b2 в качестве энекодера на разрешении 640px + форензик ветка с DCT фичами и U-Net декодер
