@@ -1,8 +1,80 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from src.config import ExperimentConfig, load_experiment_config
+
+
+def test_inheritance_merges_nested_sections_and_replaces_lists(tmp_path, monkeypatch):
+    base = load_experiment_config("configs/baseline.yaml").to_dict()
+    base["model"]["decoder_kwargs"] = {"nested": {"keep": 1, "change": 2}}
+    (tmp_path / "base.yaml").write_text(yaml.safe_dump(base), encoding="utf-8")
+    folder = tmp_path / "children"
+    folder.mkdir()
+    (folder / "middle.yaml").write_text(
+        "extends: ../base.yaml\ntrain:\n  batch_size: 2\n"
+        "model:\n  decoder_kwargs:\n    nested:\n      change: 3\n", encoding="utf-8",
+    )
+    child = folder / "child.yaml"
+    child.write_text(
+        "extends: middle.yaml\npaths:\n  run_name: child\n"
+        "train:\n  lr: 0.001\neval:\n  mask_thresholds: [0.3, 0.7]\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path.parent)
+    config = load_experiment_config(child)
+    assert config.paths.run_name == "child"
+    assert config.train.batch_size == 2
+    assert config.train.lr == 0.001
+    assert config.train.epochs == base["train"]["epochs"]
+    assert config.eval.mask_thresholds == (0.3, 0.7)
+    assert config.model.decoder_kwargs == {"nested": {"keep": 1, "change": 3}}
+    assert "extends" not in config.to_dict()
+    assert ExperimentConfig.from_dict(config.to_dict()) == config
+    assert load_experiment_config(tmp_path / "base.yaml").train.batch_size == base["train"]["batch_size"]
+
+
+@pytest.mark.parametrize("reference", ["null", "[]", "{}", "42", "true", "''", "' '"])
+def test_inheritance_rejects_invalid_parent_reference(tmp_path, reference):
+    path = tmp_path / "child.yaml"
+    path.write_text(f"extends: {reference}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="extends.*non-empty.*string"):
+        load_experiment_config(path)
+
+
+@pytest.mark.parametrize("indirect", [False, True])
+def test_inheritance_rejects_cycles_with_file_names(tmp_path, indirect):
+    path = tmp_path / "child.yaml"
+    parent = "parent.yaml" if indirect else "child.yaml"
+    path.write_text(f"extends: {parent}\n", encoding="utf-8")
+    (tmp_path / "parent.yaml").write_text("extends: child.yaml\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="[Cc]yclic.*child.yaml"):
+        load_experiment_config(path)
+
+
+def test_inheritance_reports_missing_parent(tmp_path):
+    path = tmp_path / "child.yaml"
+    path.write_text("extends: missing.yaml\n", encoding="utf-8")
+    with pytest.raises(FileNotFoundError, match="missing.yaml"):
+        load_experiment_config(path)
+
+
+def test_inherited_config_still_validates_unknown_keys(tmp_path):
+    parent = Path("configs/baseline.yaml").resolve().as_posix()
+    path = tmp_path / "child.yaml"
+    path.write_text(f"extends: {parent}\ntrain:\n  typo: 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown keys in train: typo"):
+        load_experiment_config(path)
+
+
+@pytest.mark.parametrize("contents", ["", "[]", "42"])
+def test_inheritance_rejects_non_mapping_parent(tmp_path, contents):
+    (tmp_path / "parent.yaml").write_text(contents, encoding="utf-8")
+    path = tmp_path / "child.yaml"
+    path.write_text("extends: parent.yaml\n", encoding="utf-8")
+    with pytest.raises(TypeError, match="parent.yaml.*mapping"):
+        load_experiment_config(path)
 
 
 def test_portable_config_uses_machine_paths(tmp_path, monkeypatch):

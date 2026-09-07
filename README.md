@@ -6,7 +6,7 @@ Reusable code lives in `src/`, experiment settings in `configs/`, and results in
 ## Training
 
 Open `notebooks/baseline_pipeline.ipynb` with the `challenges` kernel. For a new
-experiment, copy `configs/baseline.yaml`, change its parameters and `run_name`, and
+experiment, create a YAML inheriting from an existing config, set `run_name`, and
 select the new YAML in the notebook. The same pipeline can run from a Python script:
 
 ```python
@@ -16,6 +16,27 @@ from src.training.engine import run_experiment
 run = run_experiment(load_experiment_config("configs/baseline.yaml"))
 print(run.summary)
 ```
+
+For example, `configs/my_experiment.yaml` can contain only the overrides:
+
+```yaml
+extends: baseline_mixed_original.yaml
+paths:
+  run_name: my_experiment
+dataset:
+  image_size: 672
+train:
+  batch_size: 2
+  accum_steps: 8
+```
+
+`extends` names one parent YAML, relative to the file containing it (absolute
+paths also work). Parents can inherit from other configs. Nested mappings merge
+recursively; child values win, and lists replace the entire inherited list.
+Omitted fields are inherited; an empty mapping does not clear inherited keys.
+Cycles, missing parents, and invalid settings raise errors during loading.
+Changing a parent affects its descendants on their next load. Run snapshots
+contain the fully resolved settings, without `extends`, and remain self-contained.
 
 Inspect `summary.json`, `metrics.csv`, and `notes.md` in the run directory.
 `notebooks/16_forensic_maps_before_resize.ipynb` is a historical research archive;

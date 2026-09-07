@@ -379,11 +379,38 @@ class ExperimentConfig:
         return plain
 
 
+class _ConfigLoader:
+    """Resolve single-parent YAML inheritance before validating an experiment."""
+
+    def load(self, path: Path, chain: tuple[Path, ...] = ()) -> dict[str, Any]:
+        path = path.resolve()
+        if path in chain:
+            names = " -> ".join(str(item) for item in (*chain, path))
+            raise ValueError(f"Cyclic config inheritance: {names}")
+        with path.open("r", encoding="utf-8") as fh:
+            data = dict(_mapping(yaml.safe_load(fh), str(path)))
+        if "extends" not in data:
+            return data
+        parent = data.pop("extends")
+        if not isinstance(parent, str) or not parent.strip():
+            raise ValueError(f"extends in {path} must be a non-empty string")
+        inherited = self.load(path.parent / parent, (*chain, path))
+        return self._merge(inherited, data)
+
+    def _merge(self, base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+        merged = dict(base)
+        for key, value in overrides.items():
+            if isinstance(merged.get(key), Mapping) and isinstance(value, Mapping):
+                merged[key] = self._merge(merged[key], value)
+            else:
+                merged[key] = value
+        return merged
+
+
 def load_experiment_config(path: str | Path) -> ExperimentConfig:
+    """Load YAML, recursively merging an optional relative or absolute `extends`."""
     path = Path(path)
-    with path.open("r", encoding="utf-8") as fh:
-        data = yaml.safe_load(fh)
-    return ExperimentConfig.from_dict(data, base_dir=path.parent)
+    return ExperimentConfig.from_dict(_ConfigLoader().load(path), base_dir=path.parent)
 
 
 def _augmentation_from_dict(data: Mapping[str, Any]) -> AugmentationConfig:
