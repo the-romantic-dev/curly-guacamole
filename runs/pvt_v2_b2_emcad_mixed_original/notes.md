@@ -2,10 +2,10 @@
 run: pvt_v2_b2_emcad_mixed_original
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_mixed_original
+change: "Замена UNet декодера на более легкий EMCAD декодер"
 leaderboard_score: 0.9155776863466468
 ---
 

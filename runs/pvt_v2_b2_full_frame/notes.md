@@ -2,10 +2,10 @@
 run: pvt_v2_b2_full_frame
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
 parent: null
-change: null
+change: "Бейзлайн"
 leaderboard_score: 0.8654487985760507
 ---
 

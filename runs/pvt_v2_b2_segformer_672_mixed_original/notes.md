@@ -2,10 +2,10 @@
 run: pvt_v2_b2_segformer_672_mixed_original
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_segformer_mixed_original
+change: "Увеличение входного размера рейсайза с 640 до 672"
 leaderboard_score: 0.8976302931446398
 ---
 

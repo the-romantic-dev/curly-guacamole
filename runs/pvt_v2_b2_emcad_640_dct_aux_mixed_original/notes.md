@@ -4,8 +4,8 @@ series: pvt
 baseline:
 verdict: inconclusive
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_emcad_mixed_original
+change: "Добавил aux голову из forensic ветки в лосс, чтобы она лучше обучалась"
 leaderboard_score: 0.9102675917753401
 ---
 

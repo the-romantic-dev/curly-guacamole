@@ -2,11 +2,12 @@
 run: pvt_v2_b2_640_letterbox
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
-parent: null
-change: null
-leaderboard_score: null
+parent: pvt_v2_b2_mixed_original
+change: "Ресайз делается пропорицонально сторонам изображения, пустоты заполняются paddings"
+leaderboard_score: 0.9076732393506214
+
 ---
 
 **Что проверяли.** ЗАПОЛНИТЬ: ровно одно отличие от baseline, одним предложением.

@@ -2,7 +2,7 @@
 run: pvt_v2_b2_mixed_original
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
 parent: pvt_v2_b2_full_frame
 change: "Добавил обучение 50/50 с full frame изображениями без кропа + 2 последние эпохи дотюна на 100% full_frame"

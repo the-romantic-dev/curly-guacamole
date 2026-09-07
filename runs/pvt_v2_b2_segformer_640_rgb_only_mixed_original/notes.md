@@ -2,10 +2,10 @@
 run: pvt_v2_b2_segformer_640_rgb_only_mixed_original
 series: pvt
 baseline:
-verdict: inconclusive
+verdict: null
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_segformer_mixed_original
+change: "Абляция c отключением ветки форензики"
 leaderboard_score: 0.9102606508245843
 ---
 

@@ -4,8 +4,8 @@ series: pvt
 baseline:
 verdict: inconclusive
 source:
-parent: null
-change: null
+parent: pvt_v2_b2_mixed_original
+change: "Заменил UNet декодер на легкий MLP декодер из SegFormer"
 leaderboard_score: 0.9085029849065337
 ---
 
