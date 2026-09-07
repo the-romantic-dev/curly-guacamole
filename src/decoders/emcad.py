@@ -15,6 +15,7 @@ from torch import nn
 from .base import Decoder
 from .layers import make_norm
 from .registry import register_decoder
+from .refinement import RGBLogitRefinement, SpatialResidualRefinement
 
 
 class ChannelAttention(nn.Module):
@@ -119,8 +120,18 @@ class EMCADDecoder(Decoder):
 
     def __init__(self, encoder_channels, encoder_strides, norm='batch', use_aux=False,
                  kernel_sizes=(1, 3, 5), expansion_factor=2, lgag_kernel_size=3,
-                 activation='relu'):
+                 activation='relu', output_refinement_channels=0,
+                 rgb_refinement_channels=0, rgb_detail_channels=24):
         super().__init__()
+        for name, value in (('output_refinement_channels', output_refinement_channels),
+                            ('rgb_refinement_channels', rgb_refinement_channels),
+                            ('rgb_detail_channels', rgb_detail_channels)):
+            if type(value) is not int or value < 0:
+                raise ValueError(f'{name} must be a nonnegative integer')
+        if output_refinement_channels and rgb_refinement_channels:
+            raise ValueError('Choose one refinement experiment at a time')
+        if rgb_refinement_channels and not rgb_detail_channels:
+            raise ValueError('RGB refinement requires positive rgb_detail_channels')
         if len(encoder_channels) != 4 or tuple(encoder_strides) != (4, 8, 16, 32):
             raise ValueError('EMCAD requires four encoder scales at strides 4, 8, 16, 32')
         if any(c < 2 or c % 2 for c in encoder_channels):
@@ -151,6 +162,19 @@ class EMCADDecoder(Decoder):
         self.out_channels = channels[-1]
         self.output_stride = 4
         self.aux_head = nn.Conv2d(self.out_channels, 1, 1) if use_aux else None
+        self.output_refinement = (
+            SpatialResidualRefinement(self.out_channels, output_refinement_channels, norm)
+            if output_refinement_channels else nn.Identity()
+        )
+        self.rgb_refinement = (
+            RGBLogitRefinement(self.out_channels, rgb_refinement_channels, rgb_detail_channels, norm)
+            if rgb_refinement_channels else None
+        )
+
+    def refine_logits(self, image, features, logits):
+        if self.rgb_refinement is None:
+            return logits
+        return self.rgb_refinement(image, features, logits)
 
     def forward(self, encoder_features):
         if len(encoder_features) != 4:
@@ -166,4 +190,4 @@ class EMCADDecoder(Decoder):
             if stage == 3 and self.training and self.aux_head is not None:
                 aux_logits = self.aux_head(features)
             features = refine(self.spatial_attention(attention(features)))
-        return features, aux_logits
+        return self.output_refinement(features), aux_logits

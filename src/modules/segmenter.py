@@ -98,6 +98,7 @@ class Segmenter(nn.Module):
         logits = self.segmentation_head(
             decoder_features
         )
+        logits = self.decoder.refine_logits(image, decoder_features, logits)
 
         result = {
             "logits": self._resize(logits, input_size),

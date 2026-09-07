@@ -15,6 +15,10 @@ class Decoder(nn.Module, ABC):
     output_stride: int
     head_kernel_size: int = 1
 
+    def refine_logits(self, image: Tensor, features: Tensor, logits: Tensor) -> Tensor:
+        """Optional image-conditioned correction before input-size restoration."""
+        return logits
+
     @abstractmethod
     def forward(self, features: Sequence[Tensor]) -> tuple[Tensor, Tensor | None]:
         raise NotImplementedError
