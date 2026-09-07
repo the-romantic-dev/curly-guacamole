@@ -1,0 +1,6 @@
+extends: emcad_mixed_original.yaml
+paths:
+  run_name: pvt_v2_b2_emcad_640_stride4_mixed_original
+model:
+  decoder_kwargs:
+    output_refinement_channels: 144
