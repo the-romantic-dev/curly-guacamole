@@ -30,6 +30,8 @@ class SampleIO:
         for column in required:
             values = dataframe[column]
             invalid = values.isna() | values.astype(str).str.strip().eq("")
+            if column == "gt_path" and "target_kind" in dataframe:
+                invalid &= dataframe["target_kind"].ne("original_zero")
             if invalid.any():
                 raise ValueError(f"dataset column {column!r} contains empty paths")
 
@@ -55,6 +57,8 @@ class SampleIO:
         return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
     def load_mask(self, row: pd.Series, image_shape: tuple[int, int], *, strict_size: bool = False) -> np.ndarray:
+        if row.get("target_kind") == "original_zero":
+            return np.zeros(image_shape, dtype=np.float32)
         path = self.mask_path(row)
         mask = read_image(path, cv2.IMREAD_GRAYSCALE)
         if mask is None:

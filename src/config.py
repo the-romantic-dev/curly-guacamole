@@ -119,20 +119,28 @@ class DatasetConfig:
     image_size: int
     resize_mode: str = "stretch"
     jpeg_qtable_order: str = "legacy_zigzag"
+    protocol_path: str | None = None
+    train_originals: bool = False
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> DatasetConfig:
         data = _mapping(data, "dataset")
-        _check_keys(data, {"fold", "n_folds", "image_size"}, "dataset", optional={"resize_mode", "jpeg_qtable_order"})
+        _check_keys(data, {"fold", "n_folds", "image_size"}, "dataset", optional={"resize_mode", "jpeg_qtable_order", "protocol_path", "train_originals"})
         config = cls(
             fold=int(_required(data, "fold", "dataset")),
             n_folds=int(_required(data, "n_folds", "dataset")),
             image_size=int(_required(data, "image_size", "dataset")),
             resize_mode=str(data.get("resize_mode", "stretch")),
             jpeg_qtable_order=str(data.get("jpeg_qtable_order", "legacy_zigzag")),
+            protocol_path=data.get("protocol_path"),
+            train_originals=data.get("train_originals", False),
         )
         if config.n_folds < 2:
             raise ValueError("dataset.n_folds must be at least 2")
+        if config.protocol_path is not None and (not isinstance(config.protocol_path, str) or not config.protocol_path.strip()):
+            raise ValueError('dataset.protocol_path must be a nonempty string')
+        if not isinstance(config.train_originals, bool) or (config.train_originals and config.protocol_path is None):
+            raise ValueError('dataset.train_originals requires a protocol_path and boolean value')
         if config.jpeg_qtable_order not in {"natural", "legacy_zigzag"}:
             raise ValueError("dataset.jpeg_qtable_order must be 'natural' or 'legacy_zigzag'")
         if config.resize_mode not in {"stretch", "letterbox"}:
@@ -150,6 +158,8 @@ class DatasetConfig:
             "image_size": self.image_size,
             "resize_mode": self.resize_mode,
             "jpeg_qtable_order": self.jpeg_qtable_order,
+            "protocol_path": self.protocol_path,
+            "train_originals": self.train_originals,
         }
 
 

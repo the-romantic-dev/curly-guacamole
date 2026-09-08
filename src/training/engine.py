@@ -11,7 +11,9 @@ from torch import nn
 from src.budget import count_gflops
 from src.config import ExperimentConfig
 from src.data.data_workspace import DataWorkspace
+from src.eval.diagnostics import EvaluationReport
 from src.eval.metadata import build_metadata
+from src.eval.protocol import EvaluationProtocol
 from src.eval.splits import make_stratified_val_folds, train_val_fold_split
 from src.forensic.dct.constants import CHANNELS as FMAP_CHANNELS
 from src.losses import LossMeter, SegmentationLoss
@@ -86,6 +88,13 @@ class ExperimentRunner:
         ConsoleProgress.info("Создание папки эксперимента и сохранение конфигурации")
         run = Run.create(cfg.paths.runs_path, cfg.paths.run_name, resume=cfg.train.resume)
         plain_config = cfg.to_flat_dict()
+        if cfg.dataset.protocol_path:
+            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
+            plain_config.update(protocol.provenance(train_originals=cfg.dataset.train_originals))
+            train_df.to_parquet(run.dir / 'training_rows.parquet', index=False)
+            val_df.to_parquet(run.dir / 'development_rows.parquet', index=False)
+            run.save_summary({'evaluation_role': 'development', 'protocol_digest': protocol.digest,
+                              'holdout_evaluated': False, 'training_complete': False})
         run.save_snapshot(self._snapshot(plain_config, gflops))
         run.info(f"{cfg.paths.run_name}, {gflops} GFLOPS")
 
@@ -148,12 +157,17 @@ class ExperimentRunner:
                             "epoch": epoch,
                             "samples": state.seen_total,
                             "best_aic": state.best_aic,
+                            "operating_point": tuned.as_dict(),
                             "cfg": plain_config,
                         },
                         "best.pt",
                     )
                     run.info("Сохранение OOF-предсказаний, строк валидации и метрик")
                     run.save_eval(validation, val_df)
+                    if cfg.dataset.protocol_path:
+                        report = EvaluationReport(validation.accumulator, val_df, tuned)
+                        report.save(run.dir / 'development')
+                        run.save_summary({'development': report.summary()})
                     run.info(f"  новый лучший AIC {state.best_aic:.4f} -> ckpt/best.pt")
 
                 run.info("Сохранение checkpoint для продолжения: ckpt/last.pt")
@@ -187,9 +201,18 @@ class ExperimentRunner:
         run_dir = cfg.paths.runs_path / cfg.paths.run_name
         if not cfg.train.resume or not (run_dir / "ckpt" / "last.pt").exists():
             return
+        if (run_dir / 'holdout_claim.json').exists():
+            raise ValueError('Cannot resume a run after holdout evaluation was claimed; choose a new run_name')
         snapshot = Run.open(run_dir).snapshot
         saved_eval = snapshot.get("eval", snapshot)
         saved_dataset = snapshot.get("dataset", snapshot)
+        if saved_dataset.get('protocol_path') != cfg.dataset.protocol_path:
+            raise ValueError('Cannot resume with a different dataset.protocol_path; choose a new run_name')
+        if cfg.dataset.protocol_path:
+            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
+            protocol.verify_run(snapshot)
+            if saved_dataset.get('train_originals', False) != cfg.dataset.train_originals:
+                raise ValueError('Cannot resume with different train_originals')
         if saved_dataset.get("jpeg_qtable_order", "legacy_zigzag") != cfg.dataset.jpeg_qtable_order:
             raise ValueError("Cannot resume with a different dataset.jpeg_qtable_order; choose a new run_name")
         if saved_dataset.get("resize_mode", "stretch") != cfg.dataset.resize_mode:
@@ -213,6 +236,13 @@ class ExperimentRunner:
 
     def _split_data(self):
         cfg = self.config
+        if cfg.dataset.protocol_path:
+            if cfg.eval.resolution != 'original':
+                raise ValueError('Independent protocol requires original-resolution evaluation')
+            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
+            development = EvaluationReport.add_jpeg_metadata(protocol.rows('development'),
+                                                             self.data_workspace.train_root, cfg.train.workers)
+            return protocol.rows('train', include_originals=cfg.dataset.train_originals), development
         metadata = build_metadata(self.data_workspace, workers=cfg.train.workers)
         ConsoleProgress.info(f"Метаданные готовы: {len(metadata)} строк; построение {cfg.dataset.n_folds} фолдов, val fold={cfg.dataset.fold}")
         folds = make_stratified_val_folds(
@@ -341,6 +371,7 @@ class ExperimentRunner:
                 "gflops": round(gflops, 1),
                 "within_limit": gflops <= 100,
                 "validation_resolution": self.config.eval.resolution,
+                "training_complete": True,
             }
         )
 

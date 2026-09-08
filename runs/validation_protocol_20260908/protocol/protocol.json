@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "seed": 42,
+  "role_folds": {
+    "train": [
+      2,
+      3,
+      4
+    ],
+    "development": [
+      0
+    ],
+    "holdout": [
+      1
+    ]
+  },
+  "selection": "development AIC including verified unique originals; holdout never tunes",
+  "hashes": {
+    "samples.parquet": "b927b7ed439fc5053034b06432c97f4d6de06e3afe6daba1f7e882021b6f22d7",
+    "originals.parquet": "9be4a11e7aeee46e720d395b908559e4de79435db4b484137e56ccc1023b83ee"
+  },
+  "limitations": [
+    "Exact original pixel duplicates and supplied groups linked; perceptual duplicates not exhaustively checked.",
+    "Historical models are not independent on this newly assigned holdout."
+  ],
+  "counts": [
+    {
+      "role": "development",
+      "is_negative": false,
+      "n": 20102
+    },
+    {
+      "role": "development",
+      "is_negative": true,
+      "n": 638
+    },
+    {
+      "role": "holdout",
+      "is_negative": false,
+      "n": 20107
+    },
+    {
+      "role": "holdout",
+      "is_negative": true,
+      "n": 633
+    },
+    {
+      "role": "train",
+      "is_negative": false,
+      "n": 60303
+    },
+    {
+      "role": "train",
+      "is_negative": true,
+      "n": 1916
+    }
+  ]
+}

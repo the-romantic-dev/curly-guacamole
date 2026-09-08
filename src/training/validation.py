@@ -39,6 +39,8 @@ def validate(
     amp: AmpContext,
     config: ExperimentConfig,
     device: torch.device,
+    *,
+    thresholds=None,
 ) -> ValidationResult:
     model.eval()
     n_bins = config.eval.n_bins
@@ -77,13 +79,14 @@ def validate(
             else:
                 _update_histograms(acc, probs, masks, cls)
 
-    ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
-    tuned = acc.best(
-        config.eval.mask_thresholds,
-        config.eval.cls_thresholds,
-        config.eval.min_areas,
-    )
-    ConsoleProgress.info(f"Подбор порогов завершён: {tuned}")
+    if thresholds is None:
+        ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
+        tuned = acc.best(config.eval.mask_thresholds, config.eval.cls_thresholds, config.eval.min_areas)
+    else:
+        if thresholds.mask_threshold >= 1 or thresholds.mask_threshold * n_bins != int(thresholds.mask_threshold * n_bins):
+            raise ValueError('Frozen mask threshold must match an exact histogram boundary')
+        tuned = acc.evaluate(thresholds.mask_threshold, thresholds.cls_threshold, thresholds.min_area)
+    ConsoleProgress.info(f"Оценка завершена: {tuned}")
     return ValidationResult(accumulator=acc, tuned=tuned, resolution=config.eval.resolution,
                             loss_components=meter.compute(), fixed=acc.evaluate(.5, .0, .0))
 
