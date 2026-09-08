@@ -6,7 +6,7 @@ baseline: pvt_v2_b2_emcad_mixed_original
 verdict: inconclusive
 source: configs/emcad_stride4_mixed_original.yaml
 change: "Две dense 3x3 свёртки 64→144→64 с residual после последней стадии EMCAD."
-leaderboard_score: null
+leaderboard_score: 0.9111572066728966
 ---
 
 **Что проверяем.** Две dense 3x3 свёртки 64→144→64 с residual после последней стадии EMCAD. Вложить свободные FLOPS в точность локализации.

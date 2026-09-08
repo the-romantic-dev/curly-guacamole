@@ -94,6 +94,8 @@ def test_train_one_epoch_flushes_last_accumulation_block():
 
     assert result.seen == 6
     assert result.loss > 0.0
+    assert result.loss_components["total"] == pytest.approx(result.loss)
+    assert "dice_neg" in result.loss_components
     assert ema.updates == 2
     assert scheduler.steps == 2
 
@@ -141,6 +143,9 @@ def test_validate_accumulates_aic_histograms():
     assert result.n_pos == 1
     assert result.n_neg == 1
     assert result.aic > 0.99
+    assert validation.loss_components["total"] > 0
+    assert validation.fixed.mask_threshold == 0.5
+    assert validation.fixed.cls_threshold == 0.0
 
 
 def test_resume_state_starts_after_saved_epoch(tmp_path):
@@ -202,3 +207,35 @@ def test_resume_state_starts_after_saved_epoch(tmp_path):
     assert model.loaded == {"model": True}
     assert ema.module.loaded == {"ema": True}
 
+
+
+def test_epoch_logs_loss_components_and_fixed_validation(tmp_path):
+    import json
+    import time
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from src.training.engine import EpochTrainResult, ExperimentRunner
+    from src.training.metric import AICAccumulator
+    from src.training.runs import Run
+    from src.training.validation import ValidationResult
+
+    config = _cpu_config()
+    runner = ExperimentRunner(config)
+    acc = AICAccumulator(n_bins=16)
+    acc.update(np.array([[[.9]], [[.1]]]), np.array([[[1]], [[0]]]))
+    score = acc.evaluate(.5)
+    validation = ValidationResult(acc, score, loss_components={"total": .6, "bce": .1, "dice": .2, "cls": .3}, fixed=score)
+    result = EpochTrainResult(.9, 0, 2, .5, {"total": .9, "bce": .2, "dice": .4, "cls": .3, "dice_pos": .5})
+    with Run.create(tmp_path, "logging", tensorboard=False) as run:
+        runner._log_epoch(run=run, epoch=0, model=SimpleNamespace(forensic_gate_stats=lambda: {"max_abs": 0}),
+                          train_result=result, tuned=score, seen_total=2, started=time.time(), steps_per_epoch=1,
+                          optimizer=SimpleNamespace(param_groups=[{"lr": .001}]), validation=validation)
+    row = json.loads(run.jsonl_path.read_text(encoding="utf-8").splitlines()[0])
+    assert row["train/loss"] == .9
+    assert row["train/loss_dice_pos"] == .5
+    assert row["val/loss_main"] == pytest.approx(.3)
+    assert row["val/loss_total"] == .6
+    assert row["val/aic_fixed"] == score.aic
+    assert "val/loss_main" in run.csv_path.read_text(encoding="utf-8")

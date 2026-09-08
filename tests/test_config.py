@@ -176,7 +176,7 @@ def test_config_to_dict_keeps_current_runtime_shape():
     config = load_experiment_config("configs/baseline.yaml")
     runtime = config.to_dict()
 
-    assert set(runtime) == {"paths", "seed", "model", "augmentation", "dataset", "train", "eval"}
+    assert set(runtime) == {"paths", "seed", "model", "augmentation", "dataset", "train", "eval", "loss"}
     assert runtime["model"]["encoder_name"] == "pvt_v2_b2"
     assert runtime["dataset"]["image_size"] == 640
     assert "augmentations" not in runtime

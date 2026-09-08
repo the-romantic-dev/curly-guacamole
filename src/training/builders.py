@@ -79,7 +79,8 @@ def build_datasets(
     train_df,
     val_df,
 ) -> tuple[AIIJCDataset, AIIJCDataset]:
-    augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs)
+    augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs,
+                                        jpeg_qtable_order=config.dataset.jpeg_qtable_order)
 
     train_ds = AIIJCDataset(
         data_workspace=data_workspace,
@@ -91,6 +92,7 @@ def build_datasets(
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
         mode="train",
+        jpeg_qtable_order=config.dataset.jpeg_qtable_order,
         resize_mode=config.dataset.resize_mode,
     )
 
@@ -104,6 +106,7 @@ def build_datasets(
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
         mode="val",
+        jpeg_qtable_order=config.dataset.jpeg_qtable_order,
         resize_mode=config.dataset.resize_mode,
         original_targets=config.eval.resolution == "original",
     )

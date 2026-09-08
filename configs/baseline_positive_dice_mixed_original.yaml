@@ -1,0 +1,6 @@
+extends: baseline_mixed_original.yaml
+paths:
+  run_name: pvt_v2_b2_positive_dice_mixed_original
+loss:
+  dice_scope: positive
+  dice_weight: 1

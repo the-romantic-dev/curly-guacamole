@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Iterable, Sized
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 from torch import nn
@@ -14,7 +14,7 @@ from src.data.data_workspace import DataWorkspace
 from src.eval.metadata import build_metadata
 from src.eval.splits import make_stratified_val_folds, train_val_fold_split
 from src.forensic.dct.constants import CHANNELS as FMAP_CHANNELS
-from src.losses import compute_loss
+from src.losses import LossMeter, SegmentationLoss
 from src.progress import ConsoleProgress
 from src.training.base import set_random_seed
 from src.training.builders import (
@@ -38,6 +38,7 @@ class EpochTrainResult:
     skipped_steps: int
     seen: int
     negative_fraction: float = 0.0
+    loss_components: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -133,6 +134,7 @@ class ExperimentRunner:
                     started=started,
                     steps_per_epoch=steps_per_epoch,
                     optimizer=optimizer,
+                    validation=validation,
                 )
 
                 if tuned.aic > state.best_aic:
@@ -188,10 +190,20 @@ class ExperimentRunner:
         snapshot = Run.open(run_dir).snapshot
         saved_eval = snapshot.get("eval", snapshot)
         saved_dataset = snapshot.get("dataset", snapshot)
+        if saved_dataset.get("jpeg_qtable_order", "legacy_zigzag") != cfg.dataset.jpeg_qtable_order:
+            raise ValueError("Cannot resume with a different dataset.jpeg_qtable_order; choose a new run_name")
         if saved_dataset.get("resize_mode", "stretch") != cfg.dataset.resize_mode:
             raise ValueError("Cannot resume with a different dataset.resize_mode; choose a new run_name")
         if saved_eval.get("resolution", "resized") != cfg.eval.resolution:
             raise ValueError("Cannot resume with a different eval.resolution; choose a new run_name")
+        saved_loss = snapshot.get("loss", snapshot)
+        for key, default in (("dice_scope", "all"), ("dice_weight", 1.0)):
+            if saved_loss.get(key, default) != getattr(cfg.loss, key):
+                raise ValueError(f"Cannot resume with a different loss.{key}; choose a new run_name")
+        saved_model = snapshot.get("model", snapshot)
+        for key, default in (("aux_weight", .4), ("dct_aux_weight", 0.0)):
+            if saved_model.get(key, default) != getattr(cfg.model, key):
+                raise ValueError(f"Cannot resume with different loss weight model.{key}; choose a new run_name")
         saved_aug = snapshot.get("augmentation", snapshot)
         for key, default in (("full_frame_probability", 0.0),
                              ("foreground_crop_probability", 0.0),
@@ -278,10 +290,21 @@ class ExperimentRunner:
         started: float,
         steps_per_epoch: int,
         optimizer,
+        validation=None,
     ) -> None:
+        extra = {f"train/loss_{key}": value for key, value in train_result.loss_components.items() if key != "total"}
+        if validation is not None:
+            extra.update({f"val/loss_{key}": value for key, value in validation.loss_components.items()})
+            if validation.loss_components:
+                extra["val/loss_main"] = validation.loss_components["bce"] + validation.loss_components["dice"]
+            if validation.fixed is not None:
+                extra.update({"val/aic_fixed": validation.fixed.aic,
+                              "val/dice_fixed": validation.fixed.dice_pos,
+                              "val/fpr_fixed": validation.fixed.fpr_neg})
         run.log(
             epoch,
             {
+                **extra,
                 "samples": seen_total,
                 "train/loss": train_result.loss,
                 "train/negative_fraction": train_result.negative_fraction,
@@ -336,7 +359,9 @@ def train_one_epoch(
 ) -> EpochTrainResult:
     model.train()
     skipped_steps = 0
-    total_loss = 0.0
+    meter = LossMeter()
+    criterion = SegmentationLoss(**config.loss.to_dict(), aux_weight=config.model.aux_weight,
+                                 dct_aux_weight=config.model.dct_aux_weight)
     seen = 0
     negatives = torch.zeros((), device=device)
     total_batches = len(loader) if isinstance(loader, Sized) else None
@@ -350,13 +375,12 @@ def train_one_epoch(
 
         with amp.autocast():
             model_kwargs = {"valid_mask": batch["valid_mask"]} if "valid_mask" in batch else {}
-            loss = compute_loss(
+            loss_result = criterion(
                 model(images, batch.get("fmap"), **model_kwargs),
                 batch,
-                config.model.aux_weight,
-                dct_aux_weight=config.model.dct_aux_weight,
             )
 
+        loss = loss_result.total
         scaler.scale(loss / config.train.accum_steps).backward()
         is_accum_boundary = (step + 1) % config.train.accum_steps == 0
         is_last_batch = total_batches is not None and (step + 1) == total_batches
@@ -374,11 +398,13 @@ def train_one_epoch(
 
         batch_size = images.size(0)
         negatives += (batch["label"] <= 0.5).sum()
-        total_loss += float(loss.detach()) * batch_size
+        meter.update(loss_result, batch_size)
         seen += batch_size
 
+    components = meter.compute()
     return EpochTrainResult(
-        loss=total_loss / max(1, seen),
+        loss=components.get("total", 0.0),
+        loss_components=components,
         skipped_steps=skipped_steps,
         seen=seen,
         negative_fraction=float(negatives) / max(1, seen),

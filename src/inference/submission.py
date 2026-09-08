@@ -81,6 +81,7 @@ class InferenceConfig:
     batch_size: int
     workers: int
     resize_mode: str = "stretch"
+    jpeg_qtable_order: str = "legacy_zigzag"
 
     @classmethod
     def from_snapshot(cls, snapshot: dict) -> "InferenceConfig":
@@ -98,6 +99,7 @@ class InferenceConfig:
             int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
             str(dataset.get("resize_mode", "stretch")),
+            str(dataset.get("jpeg_qtable_order", "legacy_zigzag")),
         )
 
 
@@ -131,6 +133,7 @@ def create_submission(
     writer = SubmissionWriter(template, test_rows, output_dir)
     dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed,
                            mode="test", resize_mode=config.resize_mode,
+                           jpeg_qtable_order=config.jpeg_qtable_order,
                            use_forensics=config.model.use_forensics)
     inference_device = torch.device(device or config.device)
     ConsoleProgress.info(

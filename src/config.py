@@ -118,19 +118,23 @@ class DatasetConfig:
     n_folds: int
     image_size: int
     resize_mode: str = "stretch"
+    jpeg_qtable_order: str = "legacy_zigzag"
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> DatasetConfig:
         data = _mapping(data, "dataset")
-        _check_keys(data, {"fold", "n_folds", "image_size"}, "dataset", optional={"resize_mode"})
+        _check_keys(data, {"fold", "n_folds", "image_size"}, "dataset", optional={"resize_mode", "jpeg_qtable_order"})
         config = cls(
             fold=int(_required(data, "fold", "dataset")),
             n_folds=int(_required(data, "n_folds", "dataset")),
             image_size=int(_required(data, "image_size", "dataset")),
             resize_mode=str(data.get("resize_mode", "stretch")),
+            jpeg_qtable_order=str(data.get("jpeg_qtable_order", "legacy_zigzag")),
         )
         if config.n_folds < 2:
             raise ValueError("dataset.n_folds must be at least 2")
+        if config.jpeg_qtable_order not in {"natural", "legacy_zigzag"}:
+            raise ValueError("dataset.jpeg_qtable_order must be 'natural' or 'legacy_zigzag'")
         if config.resize_mode not in {"stretch", "letterbox"}:
             raise ValueError("dataset.resize_mode must be 'stretch' or 'letterbox'")
         if not 0 <= config.fold < config.n_folds:
@@ -145,6 +149,7 @@ class DatasetConfig:
             "n_folds": self.n_folds,
             "image_size": self.image_size,
             "resize_mode": self.resize_mode,
+            "jpeg_qtable_order": self.jpeg_qtable_order,
         }
 
 
@@ -324,6 +329,27 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class LossConfig:
+    # Missing settings preserve historical runs. New ablations opt in explicitly.
+    dice_scope: str = "all"
+    dice_weight: float = 1.0
+
+    @classmethod
+    def from_dict(cls, data):
+        data = _mapping(data, "loss")
+        _check_keys(data, set(), "loss", optional={"dice_scope", "dice_weight"})
+        config = cls(dice_scope=data.get("dice_scope", "all"), dice_weight=float(data.get("dice_weight", 1.0)))
+        if config.dice_scope not in {"all", "positive"}:
+            raise ValueError("loss.dice_scope must be 'all' or 'positive'")
+        if not 0 <= config.dice_weight < float("inf"):
+            raise ValueError("loss.dice_weight must be finite and non-negative")
+        return config
+
+    def to_dict(self):
+        return {"dice_scope": self.dice_scope, "dice_weight": self.dice_weight}
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     paths: PathsConfig
     seed: int
@@ -332,11 +358,12 @@ class ExperimentConfig:
     dataset: DatasetConfig
     train: TrainConfig
     eval: EvalConfig
+    loss: LossConfig = field(default_factory=LossConfig)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any], *, base_dir: str | Path = ".") -> ExperimentConfig:
         data = _mapping(data, "experiment")
-        _check_keys(data, {"paths", "seed", "model", "augmentation", "dataset", "train", "eval"}, "experiment")
+        _check_keys(data, {"paths", "seed", "model", "augmentation", "dataset", "train", "eval"}, "experiment", optional={"loss"})
         base_dir = Path(base_dir)
         config = cls(
             paths=PathsConfig.from_dict(_required(data, "paths", "experiment"), base_dir=base_dir),
@@ -346,6 +373,7 @@ class ExperimentConfig:
             dataset=DatasetConfig.from_dict(_required(data, "dataset", "experiment")),
             train=TrainConfig.from_dict(_required(data, "train", "experiment")),
             eval=EvalConfig.from_dict(data.get("eval")),
+            loss=LossConfig.from_dict(data.get("loss", {})),
         )
         if config.seed < 0:
             raise ValueError("seed must be non-negative")
@@ -362,6 +390,7 @@ class ExperimentConfig:
             "dataset": self.dataset.to_dict(),
             "train": self.train.to_dict(),
             "eval": self.eval.to_dict(),
+            "loss": self.loss.to_dict(),
         }
 
     def to_flat_dict(self) -> dict[str, Any]:
@@ -371,7 +400,7 @@ class ExperimentConfig:
             "run_name": self.paths.run_name,
             "seed": self.seed,
         }
-        for section in (self.model, self.augmentation, self.dataset, self.train, self.eval):
+        for section in (self.model, self.augmentation, self.dataset, self.train, self.eval, self.loss):
             if isinstance(section, AugmentationConfig):
                 plain.update(_augmentation_to_dict(section))
             else:
@@ -534,6 +563,7 @@ __all__ = [
     "EvalConfig",
     "ExperimentConfig",
     "ModelConfig",
+    "LossConfig",
     "PathsConfig",
     "TrainConfig",
     "load_experiment_config",

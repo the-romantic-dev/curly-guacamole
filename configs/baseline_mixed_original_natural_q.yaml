@@ -1,0 +1,5 @@
+extends: baseline_mixed_original.yaml
+paths:
+  run_name: pvt_v2_b2_mixed_original_natural_q
+dataset:
+  jpeg_qtable_order: natural

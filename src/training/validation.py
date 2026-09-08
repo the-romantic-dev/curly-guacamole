@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
 import torch
 
 from src.data.letterbox import Letterbox
+from src.losses import LossMeter, SegmentationLoss
 from src.progress import ConsoleProgress
 from src.training.metric import AICAccumulator, AICResult
 
@@ -23,6 +24,8 @@ class ValidationResult:
     accumulator: AICAccumulator
     tuned: AICResult
     resolution: str = "resized"
+    loss_components: dict[str, float] = field(default_factory=dict)
+    fixed: AICResult | None = None
 
     @property
     def operating_point(self) -> tuple[float, float, float]:
@@ -40,6 +43,8 @@ def validate(
     model.eval()
     n_bins = config.eval.n_bins
     acc = AICAccumulator(n_bins=n_bins)
+    meter = LossMeter()
+    criterion = SegmentationLoss(**config.loss.to_dict())
 
     for batch in ConsoleProgress.iterate(loader, "Валидация, батчи"):
         images = batch["image"].to(device, non_blocking=True, memory_format=torch.channels_last)
@@ -49,6 +54,9 @@ def validate(
             kwargs = {"valid_mask": batch["valid_mask"].to(device)} if "valid_mask" in batch else {}
             out = model(images, fmap, **kwargs)
 
+        # Comparable main-head loss on the network grid; AIC can use original GT.
+        loss_batch = {key: batch[key].to(device) for key in ("mask", "label", "valid_mask") if key in batch}
+        meter.update(criterion(out, loss_batch), len(images))
         probs = torch.sigmoid(out["logits"].float())
         cls = torch.sigmoid(out["cls_logits"].float()).reshape(-1)
 
@@ -76,7 +84,8 @@ def validate(
         config.eval.min_areas,
     )
     ConsoleProgress.info(f"Подбор порогов завершён: {tuned}")
-    return ValidationResult(accumulator=acc, tuned=tuned, resolution=config.eval.resolution)
+    return ValidationResult(accumulator=acc, tuned=tuned, resolution=config.eval.resolution,
+                            loss_components=meter.compute(), fixed=acc.evaluate(.5, .0, .0))
 
 
 def _update_histograms(acc: AICAccumulator, probs, masks, cls) -> None:

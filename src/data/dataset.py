@@ -39,6 +39,7 @@ class AIIJCDataset(Dataset):
             original_targets: bool = False,
             resize_mode: str = "stretch",
             use_forensics: bool = True,
+            jpeg_qtable_order: str = "legacy_zigzag",
     ):
         super().__init__()
         self.data_workspace = data_workspace
@@ -46,6 +47,11 @@ class AIIJCDataset(Dataset):
         self.train = self.mode == "train"
         self.has_targets = self.mode in {"train", "val"}
         self.use_forensics = use_forensics
+        if jpeg_qtable_order not in {"natural", "legacy_zigzag"}:
+            raise ValueError("jpeg_qtable_order must be 'natural' or 'legacy_zigzag'")
+        if augmentations is not None and augmentations.jpeg_qtable_order != jpeg_qtable_order:
+            raise ValueError("dataset and augmentations must use the same jpeg_qtable_order")
+        self.jpeg_qtable_order = jpeg_qtable_order
         self.image_size = image_size
         self.seed = seed
         self.original_targets = original_targets
@@ -80,7 +86,7 @@ class AIIJCDataset(Dataset):
         sample = DataSample(
             image=image,
             mask=self.load_mask(row, original_size) if self.has_targets else None,
-            qtable=luma_qtable(image_path) if self.use_forensics else None,
+            qtable=luma_qtable(image_path, order=self.jpeg_qtable_order) if self.use_forensics else None,
         )
         rng = self._make_rng(index)
         original_mask = sample.mask if self.original_targets else None

@@ -241,3 +241,61 @@ AIIJC_RUNS_PATH=/mnt/experiments/aiijc
 The same YAML and notebook work on both machines. Runtime snapshots retain
 the resolved paths for reference; loading an old experiment YAML ignores its
 stored `data_path` and `runs_path` in favor of the current machine settings.
+
+
+## Positive-only Dice experiment and loss diagnostics
+
+`configs/baseline_positive_dice_mixed_original.yaml` inherits the mixed/original
+U-Net baseline and uses a new run name. Load it with `load_experiment_config`
+and pass the result to `run_experiment` in the usual notebook pipeline.
+
+```yaml
+loss:
+  dice_scope: positive
+  dice_weight: 0.75
+```
+
+BCE still trains all masks. Dice averages only images with nonempty targets
+inside the valid region, after augmentation/resize. A batch with no positives
+contributes zero Dice and still receives BCE gradients. The same policy applies
+to decoder and DCT auxiliary losses. Reductions use float32 under AMP.
+The initial weight 0.75 roughly preserves the previous positive contribution
+with 25% negatives; it is an ablation setting, not a measured optimum.
+
+Without a `loss` section, configs retain `dice_scope: all`, `dice_weight: 1.0`.
+The scalar `compute_loss` API retains that legacy policy. New training code uses
+`SegmentationLoss`, which returns the objective and its components. Resuming a
+run with changed Dice settings or auxiliary weights is rejected before its
+snapshot is overwritten; use a new run name to change the objective.
+
+Fractional validity weights on downsampled DCT/letterbox boundaries now enter
+the Dice intersection once, rather than being squared. This corrects the old
+boundary penalty even in all-image mode. Historical runs combining DCT aux and
+letterbox should use a new run name after this correction. Binary validity masks
+are unaffected by this correction.
+
+New epoch fields in JSONL, CSV and TensorBoard:
+
+- `train/loss`: total objective, averaged by batch image count.
+- `train/loss_bce`, `train/loss_dice`, `train/loss_cls`: weighted main BCE,
+  selected Dice and classification contributions (classification weight 0.3).
+- `train/loss_aux_bce`, `train/loss_aux_dice`, `train/loss_dct_aux_bce`,
+  `train/loss_dct_aux_dice`: weighted auxiliary contributions when enabled.
+  These contributions plus the three main contributions sum to `train/loss`.
+- `train/loss_dice_pos`, `train/loss_dice_neg`: unweighted main soft-Dice loss
+  diagnostics, averaged by the actual number of images in each group over the
+  epoch. Absent groups are omitted. Negative Dice is diagnostic only in the
+  positive-only mode; it does not enter the objective.
+- `val/loss_bce`, `val/loss_dice`, `val/loss_cls`, `val/loss_total`,
+  `val/loss_dice_pos`, `val/loss_dice_neg`: corresponding EMA/eval diagnostics,
+  with no auxiliary losses. `val/loss_main` is BCE plus weighted Dice.
+- `val/aic_fixed`, `val/dice_fixed`, `val/fpr_fixed`: mask threshold 0.5,
+  classifier threshold 0 and minimum area 0 (no classifier gating). Existing
+  tuned metric fields and checkpoint selection remain based on tuned AIC.
+
+Validation losses use resized targets on the network grid, excluding padding.
+AIC uses `eval.resolution`, including original resolution when configured; the
+loss and AIC therefore need not agree on tiny regions lost during resize.
+Training contributions reflect the actual batch objective: the mean of batch
+positive-only Dice values is not necessarily the global positive-image mean.
+Use the separately counted `loss_dice_pos` diagnostic for the latter.

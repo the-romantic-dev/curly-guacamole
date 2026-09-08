@@ -20,6 +20,7 @@ class AugmentationPipeline:
             self,
             config: AugmentationConfig | Mapping[str, Any],
             *, total_epochs: int | None = None,
+            jpeg_qtable_order: str = "legacy_zigzag",
     ):
         self.config = (
             config
@@ -27,6 +28,7 @@ class AugmentationPipeline:
             else AugmentationConfig(**dict(config))
         )
         self.total_epochs = total_epochs
+        self.jpeg_qtable_order = jpeg_qtable_order
         self.epoch = 0
         if self.config.final_full_frame_epochs and total_epochs is None:
             raise ValueError("total_epochs is required for the final full-frame phase")
@@ -35,7 +37,8 @@ class AugmentationPipeline:
             AugmentationStage.BEFORE_FORENSICS: [
                 RandomJPEGRecompression(
                     quality_range=self.config.jpeg_recompression_quality_range,
-                    probability=self.config.jpeg_recompression_probability
+                    probability=self.config.jpeg_recompression_probability,
+                    jpeg_qtable_order=jpeg_qtable_order,
                 )
             ],
             AugmentationStage.AFTER_FORENSICS: [
