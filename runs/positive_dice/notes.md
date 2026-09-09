@@ -1,5 +1,5 @@
 ---
-run: emcad_mixed_original_fixed_val_natural_q_light
+run: positive_dice
 series: emcad
 parent: null
 baseline: null  # если пусто, используется parent

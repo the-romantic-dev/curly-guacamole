@@ -1,12 +1,12 @@
 ---
-run: pvt_v2_b2_emcad_640_stride2_rgb_mixed_original
+run: baseline_legacy
 series: pvt
-parent: null
-baseline: null  # если пусто, используется parent
-change: null
-leaderboard_score: null
-verdict: inconclusive
+baseline:
+verdict: null
 source:
+parent: pvt_v2_b2_mixed_original
+change: "Замена UNet декодера на более легкий EMCAD декодер"
+leaderboard_score: 0.9155776863466468
 ---
 
 **Что проверяли.** ЗАПОЛНИТЬ: ровно одно отличие от baseline, одним предложением.

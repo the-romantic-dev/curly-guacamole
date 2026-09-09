@@ -1,10 +1,10 @@
 ---
-run: pvt_v2_b2_emcad_mixed_original_fixed_val_light
+run: stride2_rgb
 series: pvt
 parent: null
 baseline: null  # если пусто, используется parent
 change: null
-leaderboard_score: 0.8985494579003909
+leaderboard_score: null
 verdict: inconclusive
 source:
 ---

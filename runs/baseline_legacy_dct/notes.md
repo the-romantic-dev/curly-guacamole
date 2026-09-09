@@ -1,12 +1,12 @@
 ---
-run: pvt_v2_b2_emcad_640_dct_aux_mixed_original
+run: baseline_legacy_dct
 series: pvt
-baseline:
+parent: null
+baseline: null  # если пусто, используется parent
+change: null
+leaderboard_score: 0.8985494579003909
 verdict: inconclusive
 source:
-parent: pvt_v2_b2_emcad_mixed_original
-change: "Добавил aux голову из forensic ветки в лосс, чтобы она лучше обучалась"
-leaderboard_score: 0.9102675917753401
 ---
 
 **Что проверяли.** ЗАПОЛНИТЬ: ровно одно отличие от baseline, одним предложением.
