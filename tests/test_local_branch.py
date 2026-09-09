@@ -52,6 +52,34 @@ def local_config(size=128):
     return replace(config.model, local_image_size=size)
 
 
+@pytest.mark.parametrize('shape', [(64, 96), (123, 171), (23, 91)])
+def test_local_preprocessing_matches_original_features(shape):
+    from src.data.local_preprocess import LocalPreprocessor
+    from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+
+    image = np.random.default_rng(7).integers(0, 256, (*shape, 3), dtype=np.uint8)
+    prep = LocalPreprocessor(64)
+    rgb = image.astype(np.float32) / 255.
+    ycc = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+    dx = np.diff(ycc, axis=1, append=ycc[:, -1:])
+    dy = np.diff(ycc, axis=0, append=ycc[-1:])
+    rgb = (prep._resize(rgb) - np.asarray(IMAGENET_DEFAULT_MEAN, np.float32)) / np.asarray(IMAGENET_DEFAULT_STD, np.float32)
+    expected = np.concatenate([rgb, prep._resize(dx), prep._resize(dy),
+                               prep._resize(abs(dx)), prep._resize(abs(dy))], axis=2).transpose(2, 0, 1)
+    np.testing.assert_array_equal(prep(image).numpy(), expected)
+
+
+def test_local_loaders_bound_prefetch_and_validation_batch(tmp_path):
+    from src.training.builders import build_datasets, build_loaders
+    cfg = load_experiment_config('configs/local.yaml')
+    rows = pd.DataFrame({'chng_img_path': ['a.jpg', 'b.jpg'], 'gt_path': ['a.png', 'b.png'],
+                         'is_negative': [False, True]})
+    datasets = build_datasets(cfg, DataWorkspace(tmp_path), rows, rows)
+    train, val = build_loaders(replace(cfg.train, workers=10, batch_size=8), *datasets)
+    assert train.prefetch_factor == val.prefetch_factor == 1
+    assert val.batch_size == train.batch_size == 8
+
+
 def test_local_training_independent_supervision_and_reload():
     from src.losses import SegmentationLoss
 
@@ -206,7 +234,7 @@ def test_local_config_rejects_letterbox():
         ExperimentConfig.from_dict(raw)
 
 
-def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path):
+def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path, monkeypatch):
     from PIL import Image
 
     from src.eval.checkpoints import CheckpointEvaluator
@@ -247,6 +275,7 @@ def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path):
     predictions = [np.asarray(Image.open(output.parent / f'predictions/{i}.png')) for i in range(2)]
     assert [p.shape for p in predictions] == [m.shape for m in masks]
     direct = score_masks(predictions, masks)
+    monkeypatch.setenv('AIIJC_DATA_PATH', str(config.paths.data_path))
     evaluated = CheckpointEvaluator(run.dir, device='cpu', batch_size=2, workers=0).evaluate(
         pd.DataFrame(rows), tmp_path / 'evaluation', purpose='synthetic-smoke')
     assert evaluated['combined']['dice_pos'] == pytest.approx(direct.dice_pos)

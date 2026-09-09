@@ -24,16 +24,27 @@ class LocalPreprocessor:
     def __call__(self, image: np.ndarray) -> torch.Tensor:
         rgb = image.astype(np.float32) / 255.0
         ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
-        dx = np.diff(ycrcb, axis=1, append=ycrcb[:, -1:])
-        dy = np.diff(ycrcb, axis=0, append=ycrcb[-1:])
         rgb = self._resize(rgb)
         rgb = (rgb - np.asarray(IMAGENET_DEFAULT_MEAN, dtype=np.float32)) / np.asarray(
             IMAGENET_DEFAULT_STD, dtype=np.float32)
         # OpenCV's fractional area path only supports <=4 channels. Reducing
         # each three-plane group also avoids a native-resolution 12-channel copy.
-        features = np.concatenate((rgb, self._resize(dx), self._resize(dy),
-                                   self._resize(np.abs(dx)), self._resize(np.abs(dy))), axis=2)
-        return torch.from_numpy(np.ascontiguousarray(features.transpose(2, 0, 1)))
+        # Write directly to the final CHW buffer, avoiding concatenation followed
+        # by another full 60 MiB layout copy. Reuse one native residual buffer.
+        features = np.empty((15, self.image_size, self.image_size), dtype=np.float32)
+        features[:3] = rgb.transpose(2, 0, 1)
+        residual = np.empty_like(ycrcb)
+        np.subtract(ycrcb[:, 1:], ycrcb[:, :-1], out=residual[:, :-1])
+        residual[:, -1] = 0
+        features[3:6] = self._resize(residual).transpose(2, 0, 1)
+        np.abs(residual, out=residual)
+        features[9:12] = self._resize(residual).transpose(2, 0, 1)
+        np.subtract(ycrcb[1:], ycrcb[:-1], out=residual[:-1])
+        residual[-1] = 0
+        features[6:9] = self._resize(residual).transpose(2, 0, 1)
+        np.abs(residual, out=residual)
+        features[12:15] = self._resize(residual).transpose(2, 0, 1)
+        return torch.from_numpy(features)
 
     def _resize(self, image):
         # Resize each dimension separately when stretch shrinks one and grows the other.

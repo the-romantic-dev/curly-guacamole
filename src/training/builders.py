@@ -140,6 +140,9 @@ def build_loaders(
 ) -> tuple[DataLoader, DataLoader]:
     DataLoaderThreadLimits.apply()
     pin_memory = torch.device(config.device).type == "cuda"
+    local = getattr(train_ds, 'local_preprocessor', None) is not None
+    # Local views are 60 MiB each; avoid buffering two huge batches per worker.
+    prefetch = 1 if local else 2
     train_loader = DataLoader(
         train_ds,
         batch_size=config.batch_size,
@@ -149,16 +152,18 @@ def build_loaders(
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
         worker_init_fn=DataLoaderThreadLimits.apply,
+        prefetch_factor=prefetch if config.workers else None,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=config.batch_size * 2,
+        batch_size=config.batch_size if local else config.batch_size * 2,
         shuffle=False,
         num_workers=config.workers,
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
         worker_init_fn=DataLoaderThreadLimits.apply,
         collate_fn=ValidationCollator(),
+        prefetch_factor=prefetch if config.workers else None,
     )
     return train_loader, val_loader
 

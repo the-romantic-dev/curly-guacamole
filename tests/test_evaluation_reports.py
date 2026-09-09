@@ -99,6 +99,7 @@ def test_holdout_pipeline_loads_frozen_checkpoint_and_writes_separate_metrics(tm
     protocol.rows('train').to_parquet(run.dir / 'training_rows.parquet', index=False)
     protocol.rows('development').to_parquet(run.dir / 'development_rows.parquet', index=False)
     monkeypatch.setattr('src.eval.checkpoints.build_model', lambda *args, **kwargs: TinyModel())
+    monkeypatch.setenv('AIIJC_DATA_PATH', str(tmp_path / 'data'))
     evaluator = CheckpointEvaluator(run.dir, device='cpu', batch_size=2, workers=0)
     result = evaluator.holdout()
     assert result['provided']['n_pos'] > 0 and result['provided']['n_neg'] > 0
