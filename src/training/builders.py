@@ -233,10 +233,9 @@ def build_ema(
     config: TrainConfig,
     model,
 ) -> torch.optim.swa_utils.AveragedModel:
-    decay = config.ema_decay
     return torch.optim.swa_utils.AveragedModel(
         model,
-        avg_fn=lambda avg, cur, _: decay * avg + (1 - decay) * cur,
+        multi_avg_fn=torch.optim.swa_utils.get_ema_multi_avg_fn(config.ema_decay),
     )
 
 
