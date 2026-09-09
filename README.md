@@ -70,6 +70,16 @@ AIIJC_WORKERS=10
 
 ## Оценка и результаты
 
+### Профиль скорости обучения
+
+На сервере с CUDA, отдельно от работающего обучения:
+
+```bash
+python -m src.training.profiling --config configs/local.yaml --warmup 8 --batches 32 --output profiles/local.json
+```
+
+Команда использует параметры оборудования из `.env`. Две временные модели без загрузки pretrained и без сохранения запусков сравнивают обычный DataLoader (`loader`) с повторением одного готового батча на GPU (`gpu_replay`). Warmup исключён из статистики. Отчёт содержит wall time на батч и CUDA Events для transfer, forward+loss, backward, optimizer (включая clipping), EMA+scheduler и учёта метрик. Для optimizer/EMA также выводится время на обновление, учитывающее accumulation. CUDA Events измеряют интервалы в stream, включая паузы подачи команд CPU; это не сумма длительностей отдельных kernels. Replay исключает загрузку/перенос данных, но использует один фиксированный батч, поэтому является диагностическим сравнением. Архитектура и loss берутся из выбранного конфига; существующие веса и результаты не изменяются.
+
 При сборке submission путь к данным берётся из `AIIJC_DATA_PATH` текущей среды (переменная процесса → `.env` → `global_config.DATA_PATH`), а не из snapshot обучения. Относительный путь разрешается от корня проекта. Явный аргумент `data_path` / `--data-path` имеет приоритет; без отдельного `template_path` шаблон submission также читается из выбранной папки данных.
 
 - [Протокол валидации](docs/validation_protocol.md): правила development и однократного holdout.

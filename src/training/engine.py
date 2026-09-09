@@ -348,6 +348,7 @@ def train_one_epoch(
     amp: AmpContext,
     config: ExperimentConfig,
     device: torch.device,
+    profiler=None,
 ) -> EpochTrainResult:
     model.train()
     skipped_steps = 0
@@ -362,8 +363,12 @@ def train_one_epoch(
     for step, batch in enumerate(ConsoleProgress.iterate(
         loader, "Обучение, батчи", image_count=lambda batch: len(batch["image"]), measure_wait=True
     )):
+        if profiler is not None:
+            profiler.begin(step)
         batch = _move_batch_to_device(batch, device)
         images = batch["image"].to(memory_format=torch.channels_last)
+        if profiler is not None:
+            profiler.mark()
 
         with amp.autocast():
             model_kwargs = {"valid_mask": batch["valid_mask"]} if "valid_mask" in batch else {}
@@ -374,8 +379,12 @@ def train_one_epoch(
                 batch,
             )
 
+        if profiler is not None:
+            profiler.mark()
         loss = loss_result.total
         scaler.scale(loss / config.train.accum_steps).backward()
+        if profiler is not None:
+            profiler.mark()
         is_accum_boundary = (step + 1) % config.train.accum_steps == 0
         is_last_batch = total_batches is not None and (step + 1) == total_batches
         if is_accum_boundary or is_last_batch:
@@ -387,13 +396,21 @@ def train_one_epoch(
             scaler.update()
             skipped_steps += int(scaler.get_scale() < before)
             optimizer.zero_grad(set_to_none=True)
+        if profiler is not None:
+            profiler.mark()
+        if is_accum_boundary or is_last_batch:
             ema.update_parameters(model)
             scheduler.step()
+        if profiler is not None:
+            profiler.mark()
 
         batch_size = images.size(0)
         negatives += (batch["label"] <= 0.5).sum()
         meter.update(loss_result, batch_size)
         seen += batch_size
+        if profiler is not None:
+            profiler.mark()
+            profiler.end(is_accum_boundary or is_last_batch)
 
     components = meter.compute()
     return EpochTrainResult(
