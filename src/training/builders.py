@@ -78,6 +78,8 @@ def build_datasets(
     val_df,
 ) -> tuple[AIIJCDataset, AIIJCDataset]:
     augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs)
+    amp = build_amp(config.train)
+    local_dtype = amp.dtype if amp.enabled else torch.float32
 
     train_ds = AIIJCDataset(
         data_workspace=data_workspace,
@@ -91,6 +93,7 @@ def build_datasets(
         mode="train",
         resize_mode=config.dataset.resize_mode,
         local_image_size=config.model.local_image_size,
+        local_dtype=local_dtype,
     )
 
     val_ds = AIIJCDataset(
@@ -106,6 +109,7 @@ def build_datasets(
         resize_mode=config.dataset.resize_mode,
         original_targets=True,
         local_image_size=config.model.local_image_size,
+        local_dtype=local_dtype,
     )
 
     return train_ds, val_ds

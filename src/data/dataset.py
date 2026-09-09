@@ -41,6 +41,7 @@ class AIIJCDataset(Dataset):
             resize_mode: str = "stretch",
             use_forensics: bool = True,
             local_image_size: int = 0,
+            local_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
         self.data_workspace = data_workspace
@@ -51,6 +52,7 @@ class AIIJCDataset(Dataset):
         if local_image_size and resize_mode != 'stretch':
             raise ValueError('local_image_size currently requires stretch geometry')
         self.local_preprocessor = LocalPreprocessor(local_image_size) if local_image_size else None
+        self.local_dtype = local_dtype
         self.image_size = image_size
         self.seed = seed
         self.original_targets = self.mode == "val" if original_targets is None else original_targets
@@ -106,7 +108,9 @@ class AIIJCDataset(Dataset):
         if self.local_preprocessor is not None:
             # One appearance draw on native geometry shared by both views.
             sample = self._augment(AugmentationStage.FINAL, sample, rng)
-            local_input = self.local_preprocessor(sample.image)
+            # Match the first local convolution's AMP cast before IPC/H2D.
+            # Native residual extraction and resize always remain float32.
+            local_input = self.local_preprocessor(sample.image).to(self.local_dtype)
             sample = self.preprocessor.resize(sample)
         else:
             sample = self.preprocessor.resize(sample)

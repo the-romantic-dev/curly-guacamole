@@ -29,6 +29,7 @@ from src.training.builders import (
 )
 from src.training.metric import AICResult
 from src.training.runs import Run
+from src.training.transfer import BatchTransfer
 from src.training.validation import validate
 
 
@@ -349,6 +350,7 @@ def train_one_epoch(
     config: ExperimentConfig,
     device: torch.device,
     profiler=None,
+    asynchronous_transfer=True,
 ) -> EpochTrainResult:
     model.train()
     skipped_steps = 0
@@ -359,13 +361,14 @@ def train_one_epoch(
     negatives = torch.zeros((), device=device)
     total_batches = len(loader) if isinstance(loader, Sized) else None
     optimizer.zero_grad(set_to_none=True)
+    transfer = BatchTransfer(device, asynchronous=asynchronous_transfer)
 
     for step, batch in enumerate(ConsoleProgress.iterate(
         loader, "Обучение, батчи", image_count=lambda batch: len(batch["image"]), measure_wait=True
     )):
         if profiler is not None:
             profiler.begin(step)
-        batch = _move_batch_to_device(batch, device)
+        batch = transfer(batch)
         images = batch["image"].to(memory_format=torch.channels_last)
         if profiler is not None:
             profiler.mark()

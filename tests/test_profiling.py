@@ -80,3 +80,20 @@ def test_worker_sweep_rejects_invalid_arguments(workers, repeats):
     from src.training.profiling import benchmark_workers
     with pytest.raises(ValueError):
         benchmark_workers(None, workers, repeats=repeats)
+
+
+def test_compare_transfer_cli_runs_all_variants_and_saves_report(tmp_path, monkeypatch):
+    import json
+    from src.training import profiling
+
+    called = []
+    def fake_benchmark(config, *, transport, batches, warmup):
+        called.append((transport, batches, warmup))
+        return {'results': {'loader': {'wall_ms_per_batch': 300}}}
+
+    monkeypatch.setattr(profiling, 'benchmark', fake_benchmark)
+    output = tmp_path / 'transfer.json'
+    monkeypatch.setattr('sys.argv', ['profiling', '--compare-transfer', '--batches', '64', '--output', str(output)])
+    profiling.main()
+    assert called == [(mode, 64, 8) for mode in ('legacy', 'compact', 'optimized')]
+    assert list(json.loads(output.read_text())) == ['legacy', 'compact', 'optimized']
