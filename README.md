@@ -54,9 +54,23 @@ train:
 
 `extends` разрешается относительно YAML; словари объединяются, списки заменяются. `.env`/переменные среды `AIIJC_DATA_PATH` и `AIIJC_RUNS_PATH` задают машинные пути. `dataset.protocol_path` — необязательная настройка расположения обязательного manifest; по умолчанию используется сохранённый `runs/validation_protocol_20260908/protocol`, даже если текущая рабочая папка другая. Это не переключатель старой/новой валидации.
 
+Параметры оборудования можно переопределить в `.env` или переменных процесса:
+
+```dotenv
+AIIJC_BATCH_SIZE=4
+AIIJC_ACCUM_STEPS=4
+AIIJC_AMP=bf16
+AIIJC_DEVICE=cuda
+AIIJC_WORKERS=10
+```
+
+Приоритет: переменные процесса → `.env` → YAML, включая наследуемые рецепты. Пустое значение оставляет настройку из YAML. Для `amp` допустимы `off`, `fp16`, `bf16`. Пример есть в [.env.example](.env.example). Переопределения применяются при `load_experiment_config`; snapshots сохраняют фактические значения, а `ExperimentConfig.from_dict(snapshot)` не подменяет параметры обучения настройками текущей видеокарты. Batch size, accumulation и AMP могут влиять на результат обучения; одинаковый effective batch не гарантирует одинаковое поведение BatchNorm.
+
 По умолчанию `resume: false`; занятое имя получает суффикс. Для продолжения укажите фактическое имя папки и `train.resume: true`. Версия pipeline, модель, loss, augmentation, геометрия и provenance проверяются до перезаписи snapshot.
 
 ## Оценка и результаты
+
+При сборке submission путь к данным берётся из `AIIJC_DATA_PATH` текущей среды (переменная процесса → `.env` → `global_config.DATA_PATH`), а не из snapshot обучения. Относительный путь разрешается от корня проекта. Явный аргумент `data_path` / `--data-path` имеет приоритет; без отдельного `template_path` шаблон submission также читается из выбранной папки данных.
 
 - [Протокол валидации](docs/validation_protocol.md): правила development и однократного holdout.
 - [Карта экспериментов](docs/experiment_map.md): соответствие старых рецептов новым и архив.

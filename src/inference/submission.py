@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from src.config import ModelConfig, PIPELINE_VERSION
+from src.config import ModelConfig, PathsConfig, PIPELINE_VERSION
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
 from src.inference.predict import Prediction, Predictor, ThresholdConfig
@@ -89,11 +89,10 @@ class InferenceConfig:
             raise ValueError('Unsupported pipeline snapshot; evaluate historical runs with the main branch')
         model = snapshot.get("model", snapshot)
         dataset = snapshot.get("dataset", snapshot)
-        paths = snapshot.get("paths", snapshot)
         train = snapshot.get("train", snapshot)
         return cls(
             ModelConfig.from_dict({f.name: model[f.name] for f in fields(ModelConfig) if f.name in model}),
-            int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
+            int(dataset["image_size"]), int(snapshot["seed"]), PathsConfig.current_data_path(),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
             str(dataset.get("resize_mode", "stretch")),
         )

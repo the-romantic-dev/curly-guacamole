@@ -25,6 +25,7 @@ dataset:
   protocol_path: runs/validation_protocol_20260908/protocol
 
 train:
+  # Hardware defaults; AIIJC_* environment variables can override these.
   device: cuda
   workers: 10
   encoder_lr: 0.0001

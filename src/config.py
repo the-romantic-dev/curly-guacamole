@@ -38,13 +38,20 @@ class PathsConfig(ConfigSection):
     runs_path: Path
     run_name: str
 
+    @staticmethod
+    def current_data_path() -> Path:
+        """Resolve data on this machine, independent of saved run paths."""
+        settings = {**dotenv_values(global_config.PROJECT_ROOT / '.env'), **os.environ}
+        return _path(settings.get('AIIJC_DATA_PATH') or global_config.DATA_PATH,
+                     global_config.PROJECT_ROOT)
+
     @classmethod
     def from_dict(cls, data, *, base_dir=Path('.')):
         data = _mapping(data, 'paths')
         _check_keys(data, {'run_name'}, 'paths', optional={'data_path', 'runs_path'})
         settings = {**dotenv_values(global_config.PROJECT_ROOT / '.env'), **os.environ}
         return cls(
-            _path(settings.get('AIIJC_DATA_PATH') or global_config.DATA_PATH, global_config.PROJECT_ROOT),
+            cls.current_data_path(),
             _path(settings.get('AIIJC_RUNS_PATH') or global_config.RUNS_PATH, global_config.PROJECT_ROOT),
             _non_empty_str(data['run_name'], 'paths.run_name'),
         )
@@ -254,9 +261,31 @@ class _ConfigLoader:
         return merged
 
 
+class RuntimeEnvironment:
+    """Machine overrides for recipes; snapshot deserialization stays unchanged."""
+
+    FIELDS = {'batch_size': int, 'accum_steps': int, 'amp': str,
+              'device': str, 'workers': int}
+
+    def apply(self, data):
+        settings = {**dotenv_values(global_config.PROJECT_ROOT / '.env'), **os.environ}
+        train = dict(_mapping(data.get('train', {}), 'train'))
+        for name, cast in self.FIELDS.items():
+            key = 'AIIJC_' + name.upper()
+            value = settings.get(key)
+            if value is None or not value.strip():
+                continue
+            try:
+                train[name] = cast(value.strip())
+            except ValueError as exc:
+                raise ValueError(f'{key} must be a valid {cast.__name__}') from exc
+        return {**data, 'train': train}
+
+
 def load_experiment_config(path):
     path = Path(path)
-    return ExperimentConfig.from_dict(_ConfigLoader().load(path), base_dir=path.parent)
+    data = RuntimeEnvironment().apply(_ConfigLoader().load(path))
+    return ExperimentConfig.from_dict(data, base_dir=path.parent)
 
 
 def _augmentation_from_dict(data):
