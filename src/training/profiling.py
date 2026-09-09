@@ -4,7 +4,9 @@ import argparse
 import gc
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
+from statistics import median
 
 import torch
 
@@ -132,15 +134,47 @@ def benchmark(config, *, batches=32, warmup=8):
             'note': 'CUDA stream intervals include host launch gaps. Replay uses one fixed batch; no run is saved.'}
 
 
+def benchmark_workers(config, workers, *, repeats=2, batches=32, warmup=8):
+    if not workers or len(set(workers)) != len(workers) or any(w < 0 for w in workers) or repeats < 1:
+        raise ValueError('Provide distinct nonnegative worker counts and positive repeats')
+    runs = {w: [] for w in workers}
+    for repeat in range(repeats):
+        # Reverse alternate passes to reduce ordering/cache bias.
+        for count in (workers if repeat % 2 == 0 else list(reversed(workers))):
+            ConsoleProgress.info(f'Workers={count}, repeat={repeat + 1}/{repeats}')
+            cfg = replace(config, train=replace(config.train, workers=count))
+            runs[count].append(benchmark(cfg, batches=batches, warmup=warmup))
+    ranking = []
+    for count, reports in runs.items():
+        times = [r['results']['loader']['wall_ms_per_batch'] for r in reports]
+        ranking.append({'workers': count, 'loader_median_ms': median(times),
+                        'loader_min_ms': min(times), 'loader_max_ms': max(times),
+                        'gpu_replay_median_ms': median(r['results']['gpu_replay']['wall_ms_per_batch'] for r in reports)})
+    ranking.sort(key=lambda row: row['loader_median_ms'])
+    for row in ranking:
+        ConsoleProgress.info(json.dumps(row))
+    best = ranking[0]['workers']
+    ConsoleProgress.info(f'Best measured loader time: AIIJC_WORKERS={best}; .env unchanged')
+    return {'recommended_workers': best, 'ranking': ranking, 'runs': runs,
+            'note': 'Worker-specific augmentation streams differ; compare repeated wall-time measurements.'}
+
+
 def main():
     from src.config import load_experiment_config
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', default='configs/local.yaml')
     parser.add_argument('--batches', type=int, default=32)
     parser.add_argument('--warmup', type=int, default=8)
+    parser.add_argument('--workers', type=int, nargs='+', help='Compare worker counts, overriding .env for this benchmark only')
+    parser.add_argument('--repeats', type=int, default=2, help='Passes for the worker comparison')
     parser.add_argument('--output', default='profiles/local.json')
     args = parser.parse_args()
-    report = benchmark(load_experiment_config(args.config), batches=args.batches, warmup=args.warmup)
+    config = load_experiment_config(args.config)
+    if args.workers is not None:
+        report = benchmark_workers(config, args.workers, repeats=args.repeats,
+                                   batches=args.batches, warmup=args.warmup)
+    else:
+        report = benchmark(config, batches=args.batches, warmup=args.warmup)
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')

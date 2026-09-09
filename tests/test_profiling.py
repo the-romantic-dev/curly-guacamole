@@ -51,3 +51,32 @@ def test_benchmark_rejects_cpu_before_loading_data():
     cfg = replace(cfg, train=replace(cfg.train, device='cpu'))
     with pytest.raises(ValueError, match='CUDA'):
         benchmark(cfg)
+
+
+def test_worker_sweep_preserves_hardware_settings_and_ranks_loader_time(monkeypatch):
+    from src.config import load_experiment_config
+    from src.training import profiling
+
+    config = load_experiment_config('configs/local.yaml')
+    calls = []
+
+    def fake_benchmark(cfg, **kwargs):
+        calls.append(cfg.train.workers)
+        assert cfg.train.batch_size == config.train.batch_size
+        assert cfg.train.accum_steps == config.train.accum_steps
+        assert cfg.train.amp == config.train.amp
+        return {'results': {'loader': {'wall_ms_per_batch': {2: 400, 4: 300, 10: 500}[cfg.train.workers]},
+                            'gpu_replay': {'wall_ms_per_batch': 200}}}
+
+    monkeypatch.setattr(profiling, 'benchmark', fake_benchmark)
+    report = profiling.benchmark_workers(config, [2, 4, 10], repeats=2)
+    assert calls == [2, 4, 10, 10, 4, 2]
+    assert report['recommended_workers'] == 4
+    assert report['ranking'][0]['loader_median_ms'] == 300
+
+
+@pytest.mark.parametrize('workers,repeats', [([], 2), ([2, 2], 2), ([-1], 2), ([2], 0)])
+def test_worker_sweep_rejects_invalid_arguments(workers, repeats):
+    from src.training.profiling import benchmark_workers
+    with pytest.raises(ValueError):
+        benchmark_workers(None, workers, repeats=repeats)
