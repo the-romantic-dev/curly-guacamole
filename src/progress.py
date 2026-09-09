@@ -20,17 +20,26 @@ class ConsoleProgress:
 
     @classmethod
     def iterate(
-        cls, items: Iterable[T], label: str, *, image_count: Callable[[T], int] | None = None
+        cls, items: Iterable[T], label: str, *, image_count: Callable[[T], int] | None = None,
+        measure_wait: bool = False,
     ) -> Iterator[T]:
         total = len(items) if isinstance(items, Sized) else None
         started = last_report = time.monotonic()
         first_completed = None
         count = 0
         images_processed = 0
+        wait_seconds = work_seconds = 0.0
+        measured_batches = 0
         cls.info(f"{label}: начало, всего {total if total is not None else '?'}; ожидание первого элемента")
+        waiting_since = time.monotonic()
         for count, item in enumerate(items, 1):
+            received = time.monotonic()
             yield item
             now = time.monotonic()
+            if count > 1:
+                wait_seconds += received - waiting_since
+                work_seconds += now - received
+                measured_batches += 1
             if image_count is not None:
                 images_processed += image_count(item)
             if count == 1:
@@ -52,6 +61,17 @@ class ConsoleProgress:
                         f", {elapsed * 1000 / images_processed:.2f} мс/изобр."
                         f", {images_processed / elapsed:.2f} изобр./с"
                     )
-                cls.info(f"{label}: {status}, прошло {cls.format_duration(elapsed)}{throughput}{eta}")
+                waiting = cls._wait_report(wait_seconds, work_seconds, measured_batches) if measure_wait else ""
+                cls.info(f"{label}: {status}, прошло {cls.format_duration(elapsed)}{throughput}{waiting}{eta}")
                 last_report = now
-        cls.info(f"{label}: завершено, обработано {count}, {cls.format_duration(time.monotonic() - started)}")
+            waiting_since = time.monotonic()
+        waiting = cls._wait_report(wait_seconds, work_seconds, measured_batches) if measure_wait else ""
+        cls.info(f"{label}: завершено, обработано {count}, {cls.format_duration(time.monotonic() - started)}{waiting}")
+
+    @staticmethod
+    def _wait_report(wait_seconds, work_seconds, count):
+        # Host-side next(loader) latency, not GPU idle time: CUDA may still work.
+        if not count:
+            return ""
+        fraction = wait_seconds / max(wait_seconds + work_seconds, 1e-9)
+        return f", ожидание данных={1000 * wait_seconds / count:.1f} мс/батч ({100 * fraction:.1f}%)"

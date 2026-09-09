@@ -30,3 +30,17 @@ def test_progress_handles_short_and_unsized_iterables(items, capsys):
     assert f"завершено, обработано {len(result)}" in output
     if result == [1]:
         assert "осталось ~00:00:00" in output
+
+
+def test_loader_wait_separates_loading_from_processing(monkeypatch, capsys):
+    clock = [0.0]
+    monkeypatch.setattr('src.progress.time.monotonic', lambda: clock[0])
+
+    def batches():
+        for _ in range(3):
+            clock[0] += 2
+            yield 1
+
+    for _ in ConsoleProgress.iterate(batches(), 'train', measure_wait=True):
+        clock[0] += 3
+    assert 'ожидание данных=2000.0 мс/батч (40.0%)' in capsys.readouterr().out
