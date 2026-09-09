@@ -11,13 +11,12 @@ from src.data.data_sample import DataSample
 
 @dataclass(frozen=True)
 class AugmentationConfig:
-    crop_scale_range: tuple[float, float]
-    jpeg_recompression_probability: float
-    jpeg_recompression_quality_range: tuple[int, int]
-    full_frame: bool
-    full_frame_probability: float = 0.0
-    foreground_crop_probability: float = 0.0
-    final_full_frame_epochs: int = 0
+    crop_scale_range: tuple[float, float] = (0.35, 1.0)
+    jpeg_recompression_probability: float = 0.3
+    jpeg_recompression_quality_range: tuple[int, int] = (60, 100)
+    full_frame_probability: float = 0.5
+    foreground_crop_probability: float = 0.5
+    final_full_frame_epochs: int = 2
 
     def __post_init__(self):
         for name in ("full_frame_probability", "foreground_crop_probability"):

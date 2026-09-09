@@ -11,12 +11,10 @@ from src.forensic.dct import luma_qtable
 
 
 class RandomJPEGRecompression(AIIJCAugmentation):
-    def __init__(self, quality_range: tuple[int, int], probability: float,
-                 *, jpeg_qtable_order: str = "legacy_zigzag") -> None:
+    def __init__(self, quality_range: tuple[int, int], probability: float) -> None:
         super().__init__()
         self.quality_range = quality_range
         self.probability = probability
-        self.jpeg_qtable_order = jpeg_qtable_order
 
     def jpeg_recompression(
             self,
@@ -38,7 +36,7 @@ class RandomJPEGRecompression(AIIJCAugmentation):
         decoded = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
         decoded = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
 
-        return decoded, luma_qtable(jpeg_bytes, order=self.jpeg_qtable_order)
+        return decoded, luma_qtable(jpeg_bytes)
 
     def apply(self, sample: DataSample, rng: np.random.Generator | None = None) -> DataSample:
         if self.probability <= 0:

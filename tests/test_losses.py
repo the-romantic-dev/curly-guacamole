@@ -75,7 +75,7 @@ def test_loss_config_roundtrip_and_legacy_resume_guard(tmp_path):
     assert ExperimentConfig.from_dict(new.to_dict()) == new
     assert new.to_flat_dict()["dice_scope"] == "positive"
     new = replace(new, paths=replace(new.paths, runs_path=tmp_path),
-                  train=replace(new.train, device="cpu", amp="off"))
+                  train=replace(new.train, device="cpu", amp="off", resume=True))
     run = Run.create(tmp_path, new.paths.run_name, tensorboard=False)
     run.save_snapshot(old.to_flat_dict())
     (run.dir / "ckpt" / "last.pt").touch()
@@ -112,10 +112,10 @@ def test_positive_loss_ignores_padding_for_main_and_aux_heads():
 
 def test_new_ablation_config():
     from src.config import load_experiment_config
-    config = load_experiment_config("configs/baseline_positive_dice_mixed_original.yaml")
+    config = load_experiment_config("configs/positive_dice.yaml")
     assert config.loss.dice_scope == "positive"
-    assert config.loss.dice_weight == .75
-    assert config.paths.run_name != load_experiment_config("configs/baseline_mixed_original.yaml").paths.run_name
+    assert config.loss.dice_weight == 1.0
+    assert config.paths.run_name != load_experiment_config("configs/baseline.yaml").paths.run_name
 
 
 def test_fractional_dct_validity_weights_intersection_once():

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+pytest-of-test/
 .ruff_cache/
 .mypy_cache/
 .coverage
@@ -28,6 +29,10 @@ runs/*/*
 !runs/*/notes.md
 !runs/.gitkeep
 !runs/__init__.py
+!runs/archive/
+!runs/archive/*/
+runs/archive/*/*
+!runs/archive/*/notes.md
 *.pt
 *.pth
 *.ckpt

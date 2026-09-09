@@ -4,7 +4,8 @@ from torch import nn
 from src.forensic.dct.constants import CHANNEL_COUNT, STRIDE
 from src.modules.forensic_fusion import ForensicFusion
 from src.modules.gate_head import GateHead
-from src.decoders import create_decoder
+from src.modules.local_branch import LocalBranch
+from src.decoders import EMCADDecoder
 from src.modules.utils import build_timm_encoder
 
 
@@ -15,8 +16,7 @@ class Segmenter(nn.Module):
 
     def __init__(
         self,
-        encoder_name,
-        decoder_channels=(128, 64, 32, 16, 16),
+        encoder_name="pvt_v2_b2",
         forensic_channels=(64, 96, 128),
         norm="batch",
         aux_weight=0.0,
@@ -24,11 +24,17 @@ class Segmenter(nn.Module):
         pretrained=True,
         use_forensics=True,
         dct_aux_weight=0.0,
-        decoder_name="unet",
-        decoder_embed_dim=128,
         decoder_kwargs=None,
+        local_image_size=0,
     ):
         super().__init__()
+        if type(local_image_size) is not int or local_image_size < 0 or local_image_size % 32:
+            raise ValueError('local_image_size must be 0 or a positive multiple of 32')
+        if local_image_size and any(
+                (decoder_kwargs or {}).get(key, 0)
+                for key in ('rgb_refinement_channels', 'output_refinement_channels')):
+            raise ValueError('local_image_size requires EMCAD without other refinement experiments')
+        self.local_image_size = local_image_size
 
         self.encoder, self.strides, self.channels = build_timm_encoder(
             encoder_name, pretrained=pretrained
@@ -43,17 +49,14 @@ class Segmenter(nn.Module):
             use_aux=dct_aux_weight > 0,
         ) if use_forensics else None
 
-        # Legacy arguments remain valid for existing notebooks and snapshots.
-        options = {
-            "unet": {"decoder_channels": decoder_channels},
-            "segformer": {"embed_dim": decoder_embed_dim},
-        }.get(decoder_name, {})
-        options.update(decoder_kwargs or {})
-        self.decoder = create_decoder(
-            decoder_name, encoder_channels=self.channels,
-            encoder_strides=self.strides, norm=norm,
-            use_aux=aux_weight > 0, **options,
+        self.decoder = EMCADDecoder(
+            encoder_channels=self.channels,
+            encoder_strides=self.strides,
+            norm=norm,
+            use_aux=aux_weight > 0 and not local_image_size,
+            **(decoder_kwargs or {}),
         )
+        self.local_branch = LocalBranch(self.decoder.out_channels, aux_weight > 0) if local_image_size else None
 
         head_kernel = self.decoder.head_kernel_size
         self.segmentation_head = nn.Conv2d(
@@ -73,8 +76,16 @@ class Segmenter(nn.Module):
         """Detached gate statistics for experiment logging."""
         return self.forensic_fusion.gate_stats() if self.forensic_fusion is not None else {"max_abs": 0.0}
 
-    def forward(self, image, forensic_map=None, valid_mask=None):
+    def forward(self, image, forensic_map=None, valid_mask=None, *, local_input=None):
         input_size = image.shape[-2:]
+        if self.local_branch is not None:
+            expected = (image.shape[0], 15, self.local_image_size, self.local_image_size)
+            if local_input is None or tuple(local_input.shape) != expected:
+                raise ValueError(f'local_input must have shape {expected}')
+            if valid_mask is not None:
+                raise ValueError('local_input currently requires stretch geometry without valid_mask')
+        elif local_input is not None:
+            raise ValueError('local_input supplied to a model with the local branch disabled')
 
         encoder_features = list(
             self.encoder(image)
@@ -94,6 +105,8 @@ class Segmenter(nn.Module):
         decoder_features, aux_logits = self.decoder(
             encoder_features
         )
+        if self.local_branch is not None:
+            decoder_features, aux_logits = self.local_branch(local_input, decoder_features)
 
         logits = self.segmentation_head(
             decoder_features

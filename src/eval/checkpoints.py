@@ -79,7 +79,8 @@ class CheckpointEvaluator:
                          self.device.type == 'cuda' and self.config.amp != 'off', False)
         dataset = AIIJCDataset(DataWorkspace(self.config.data_path), rows, False,
                               self.config.image_size, self.config.seed, mode='val', original_targets=True,
-                              resize_mode=self.config.resize_mode, jpeg_qtable_order=self.config.jpeg_qtable_order,
+                              resize_mode=self.config.resize_mode,
+                              local_image_size=self.config.model.local_image_size,
                               use_forensics=self.config.model.use_forensics)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.workers,
                             collate_fn=ValidationCollator(), worker_init_fn=DataLoaderThreadLimits.apply,
@@ -91,6 +92,8 @@ class CheckpointEvaluator:
                 for batch in ConsoleProgress.iterate(loader, f'{self.run.dir.name}: {purpose}'):
                     with amp.autocast():
                         kwargs = {'valid_mask': batch['valid_mask'].to(self.device)} if 'valid_mask' in batch else {}
+                        if 'local_input' in batch:
+                            kwargs['local_input'] = batch['local_input'].to(self.device, non_blocking=True)
                         out = model(batch['image'].to(self.device, memory_format=torch.channels_last),
                                     batch['fmap'].to(self.device) if 'fmap' in batch else None, **kwargs)
                     probs, cls = out['logits'].float().sigmoid(), out['cls_logits'].float().sigmoid().flatten()
@@ -109,8 +112,9 @@ class CheckpointEvaluator:
             if self.device.type == 'cuda':
                 torch.cuda.empty_cache()
 
-    def holdout(self, protocol_path):
-        protocol = EvaluationProtocol.load(protocol_path)
+    def holdout(self):
+        snapshot = self.run.snapshot
+        protocol = EvaluationProtocol.load(snapshot.get('dataset', snapshot)['protocol_path'])
         protocol.verify_run(self.run.snapshot)
         if not self.run.summary.get('training_complete'):
             raise ValueError('Complete development training before evaluating holdout')

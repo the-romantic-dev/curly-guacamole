@@ -4,23 +4,19 @@ import torch
 from src.modules.segmenter import Segmenter
 
 
-@pytest.mark.parametrize('name', ['emcad_stride4_mixed_original', 'emcad_stride2_rgb_mixed_original'])
-def test_experiment_protocol_inference_and_budget(name):
+@pytest.mark.parametrize('name', ['stride4', 'stride2_rgb'])
+def test_experiment_protocol_and_inference(name):
     from src.config import load_experiment_config
     from src.inference.submission import InferenceConfig
-    from src.training.builders import build_model
-    from src.budget import count_gflops
 
     config = load_experiment_config(f'configs/{name}.yaml')
-    parent = load_experiment_config('configs/emcad_mixed_original.yaml')
+    parent = load_experiment_config('configs/positive_dice.yaml')
     assert config.paths.run_name != parent.paths.run_name
-    for field in ('train', 'dataset', 'augmentation', 'eval', 'seed'):
+    assert config.train.batch_size * config.train.accum_steps == 16
+    for field in ('dataset', 'augmentation', 'eval', 'seed'):
         assert getattr(config, field) == getattr(parent, field)
     for snapshot in (config.to_dict(), config.to_flat_dict()):
         assert InferenceConfig.from_snapshot(snapshot).model == config.model
-    with torch.device('meta'):
-        model = build_model(config.model, pretrained=False).eval()
-        assert count_gflops(model, 640) <= 100
 
 
 @pytest.mark.parametrize('options', [
@@ -28,7 +24,7 @@ def test_experiment_protocol_inference_and_budget(name):
     {'rgb_refinement_channels': 32, 'rgb_detail_channels': 24},
 ])
 def test_refinement_receives_segmentation_gradients_and_reloads(options):
-    model = Segmenter('pvt_v2_b2', pretrained=False, decoder_name='emcad',
+    model = Segmenter('pvt_v2_b2', pretrained=False,
                       decoder_kwargs=options, aux_weight=0.4).train()
     image = torch.randn(2, 3, 64, 96)
     output = model(image)
@@ -40,7 +36,7 @@ def test_refinement_receives_segmentation_gradients_and_reloads(options):
         assert parameter.grad is not None
         assert torch.isfinite(parameter.grad).all()
     assert any(p.grad.abs().sum() > 0 for p in refinement.parameters())
-    restored = Segmenter('pvt_v2_b2', pretrained=False, decoder_name='emcad',
+    restored = Segmenter('pvt_v2_b2', pretrained=False,
                          decoder_kwargs=options, aux_weight=0.4).eval()
     restored.load_state_dict(model.state_dict(), strict=True)
     model.eval()

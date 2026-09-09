@@ -15,8 +15,8 @@ def test_dataset_reads_paths_and_preserves_targets(tmp_path, mode):
     (root / "images").mkdir(parents=True)
     image = np.zeros((24, 40, 3), dtype=np.uint8)
     image[..., 2] = 255
-    cv2.imencode(".png", image)[1].tofile(root / "images" / "образец.png")
-    row = {"img_path" if mode == "test" else "chng_img_path": r"images\образец.png"}
+    cv2.imencode(".png", image)[1].tofile(root / "images" / "РѕР±СЂР°Р·РµС†.png")
+    row = {"img_path" if mode == "test" else "chng_img_path": r"images\РѕР±СЂР°Р·РµС†.png"}
     if mode != "test":
         row["gt_path"] = "mask.png"
         cv2.imencode(".png", np.full((24, 40), 255, dtype=np.uint8))[1].tofile(root / "mask.png")
@@ -24,6 +24,10 @@ def test_dataset_reads_paths_and_preserves_targets(tmp_path, mode):
 
     output = dataset[0]
 
+    assert ("original_mask" in output) == (mode == "val")
+    if mode == "val":
+        assert output["original_mask"].shape == (24, 40)
+        assert output["original_mask"].all()
     assert output["image"].shape == (3, 32, 32)
     assert output["fmap"].shape == (12, 4, 4)
     assert output["image"][0].mean() > output["image"][2].mean()  # RGB conversion
@@ -69,7 +73,7 @@ def test_original_validation_aligns_smaller_mask_to_image(tmp_path, positive):
     cv2.imencode(".png", mask)[1].tofile(root / "mask.png")
     dataset = AIIJCDataset(
         workspace, pd.DataFrame([{"chng_img_path": "image.png", "gt_path": "mask.png"}]),
-        False, 32, 42, mode="val", original_targets=True,
+        False, 32, 42, mode="val",
     )
 
     output = dataset[0]
@@ -80,3 +84,15 @@ def test_original_validation_aligns_smaller_mask_to_image(tmp_path, positive):
     assert torch.equal(output["original_mask"], expected)
     assert output["mask"].shape == (1, 32, 32)
     assert output["label"].tolist() == [float(positive)]
+
+
+@pytest.mark.parametrize("original_targets", [False, True])
+def test_validation_original_targets_can_be_overridden(tmp_path, original_targets):
+    workspace = DataWorkspace(tmp_path)
+    workspace.train_root.mkdir(parents=True)
+    cv2.imencode(".png", np.zeros((24, 40, 3), dtype=np.uint8))[1].tofile(workspace.train_root / "image.png")
+    cv2.imencode(".png", np.zeros((24, 40), dtype=np.uint8))[1].tofile(workspace.train_root / "mask.png")
+    rows = pd.DataFrame([{"chng_img_path": "image.png", "gt_path": "mask.png"}])
+    dataset = AIIJCDataset(workspace, rows, False, 32, 42, mode="val",
+                          original_targets=original_targets)
+    assert ("original_mask" in dataset[0]) == original_targets

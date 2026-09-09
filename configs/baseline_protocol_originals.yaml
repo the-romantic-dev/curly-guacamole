@@ -1,5 +1,0 @@
-extends: baseline_protocol.yaml
-paths:
-  run_name: pvt_v2_b2_protocol_originals
-dataset:
-  train_originals: true

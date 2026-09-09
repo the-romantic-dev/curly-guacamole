@@ -157,10 +157,9 @@ def test_load_baseline_config(monkeypatch):
 
     assert config.paths.data_path == Path("D:/Challenges/AIIJC2026/data")
     assert config.paths.runs_path == Path("runs").resolve()
-    assert config.paths.run_name == "pvt_v2_b2_full_frame"
+    assert config.paths.run_name == "baseline"
     assert config.seed == 42
     assert config.model.encoder_name == "pvt_v2_b2"
-    assert config.model.decoder_channels == (128, 64, 32, 16, 16)
     assert config.model.forensic_channels == (64, 96, 128)
     assert config.augmentation.crop_scale_range == (0.35, 1.0)
     assert config.dataset.image_size == 640
@@ -176,7 +175,7 @@ def test_config_to_dict_keeps_current_runtime_shape():
     config = load_experiment_config("configs/baseline.yaml")
     runtime = config.to_dict()
 
-    assert set(runtime) == {"paths", "seed", "model", "augmentation", "dataset", "train", "eval", "loss"}
+    assert set(runtime) == {"pipeline_version", "paths", "seed", "model", "augmentation", "dataset", "train", "eval", "loss"}
     assert runtime["model"]["encoder_name"] == "pvt_v2_b2"
     assert runtime["dataset"]["image_size"] == 640
     assert "augmentations" not in runtime
@@ -187,7 +186,7 @@ def test_config_to_flat_dict_is_snapshot_friendly():
     config = load_experiment_config("configs/baseline.yaml")
     plain = config.to_flat_dict()
 
-    assert plain["run_name"] == "pvt_v2_b2_full_frame"
+    assert plain["run_name"] == "baseline"
     assert plain["seed"] == 42
     assert plain["encoder_name"] == "pvt_v2_b2"
     assert plain["image_size"] == 640

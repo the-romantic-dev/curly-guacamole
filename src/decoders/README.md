@@ -1,146 +1,49 @@
-# Декодеры
+# EMCAD decoder
 
-Локальный пакет с API в духе timm. Встроены `unet`, `segformer` и `emcad`;
-предобученных весов декодеров нет.
+`Segmenter` defaults to PVTv2-B2 with `EMCADDecoder`, the existing forensic
+fusion branch, and an optional local branch. Construct EMCAD directly:
 
 ```python
-from src.decoders import create_decoder, list_decoders, is_decoder
+from src.decoders import EMCADDecoder
 
-list_decoders()       # ['emcad', 'segformer', 'unet']
-list_decoders('seg*') # ['segformer']
-
-decoder = create_decoder(
-    'segformer',
+decoder = EMCADDecoder(
     encoder_channels=[64, 128, 320, 512],
     encoder_strides=[4, 8, 16, 32],
-    embed_dim=128,
-    norm='batch',
+    norm="batch",
     use_aux=True,
 )
 features, aux_logits = decoder(encoder_features)
 ```
 
-## Конфигурация эксперимента
+The four input features run from fine to coarse. Channels must be positive
+and even. Output features have stride 4 and the finest encoder width;
+explicit skip sizes support odd and rectangular geometry. Auxiliary logits
+are returned only during training when enabled.
 
-```yaml
-model:
-  encoder_name: pvt_v2_b2
-  decoder_name: segformer
-  decoder_kwargs:
-    embed_dim: 128
-  forensic_channels: [64, 96, 128]
-  aux_weight: 0.4
-  norm: batch
-```
+This adaptation uses channel attention, shared spatial attention, parallel
+additive depthwise convolutions, channel shuffle, residual connections,
+efficient upsampling, and grouped skip attention. Auxiliary supervision
+uses the merged final skip before refinement. The paper's multiple mask
+heads and training scheme are not reproduced.
 
-Для U-Net:
+`model.decoder_kwargs` passes EMCAD options directly: `kernel_sizes`,
+`expansion_factor`, `lgag_kernel_size`, `activation`, and optional refinement
+widths. Unknown options raise TypeError. Segmenter supplies encoder metadata,
+`norm`, and `use_aux`; these cannot be overridden through decoder_kwargs.
+There is no decoder registry or decoder selection argument.
 
-```yaml
-  decoder_name: unet
-  decoder_kwargs:
-    decoder_channels: [128, 64, 32, 16, 16]
-    aux_stage: 2
-```
+`configs/baseline.yaml` uses the default decoder. `configs/stride4.yaml`
+sets `output_refinement_channels: 144`; `configs/stride2_rgb.yaml` sets
+`rgb_refinement_channels: 32` and `rgb_detail_channels: 24`. The latter
+combines RGB, decoder features, and coarse logits to refine logits at
+stride 2. `output_stride` still describes the stride-4 decoder features.
+The two refinements are mutually exclusive, and neither can be combined
+with `local_image_size` in `configs/local.yaml`.
 
-`decoder_kwargs` передаются конструктору декодера. Неизвестный параметр
-вызывает ошибку, а не игнорируется. Метаданные энкодера, `norm` и `use_aux`
-передаёт Segmenter; переопределять их через `decoder_kwargs` нельзя.
-Все параметры сохраняются в snapshot и используются при инференсе.
+Segmenter owns the mask and classification heads and restores logits to
+input size. Module names (`encoder`, `decoder`, `forensic_fusion`,
+`segmentation_head`, `classification_head`, `local_branch`) retain the
+existing EMCAD checkpoint layout. Removed UNet/SegFormer snapshots are
+not supported by this API.
 
-Старые `decoder_channels` и `decoder_embed_dim` в model и аргументах Segmenter
-поддерживаются; значения из `decoder_kwargs` имеют приоритет. Без
-`decoder_name` выбирается U-Net. Ключи state_dict существующих моделей
-сохранены; старые импорты из `src.modules` также работают.
-
-## Добавление декодера
-
-1. Создать модуль, например `src/decoders/my_decoder.py`.
-2. Унаследовать класс от `Decoder` и добавить `@register_decoder('my_decoder')`.
-3. Импортировать модуль в `src/decoders/__init__.py` для регистрации во всех
-   процессах обучения и инференса. Для внешнего плагина достаточно импортировать
-   его до вызова `create_decoder` в каждом процессе.
-
-Конструктор принимает `encoder_channels`, `encoder_strides`, `norm`, `use_aux`
-и собственные именованные параметры. Не добавляйте поглощающий `**kwargs`,
-чтобы опечатки в конфигурации обнаруживались.
-
-Контракт `Decoder`:
-
-- Вход: список NCHW-признаков от мелкого stride к крупному.
-- `forward`: пара `(features, aux_logits)`, где aux может быть `None`.
-- `out_channels`: число каналов выходных признаков.
-- `output_stride`: шаг выходных признаков относительно изображения.
-- `head_kernel_size`: нечётный размер ядра внешней mask head; по умолчанию 1.
-- `refine_logits(image, features, logits)`: необязательная поправка к маске;
-  по умолчанию возвращает logits без изменений.
-
-Segmenter самостоятельно строит mask head, увеличивает logits до размера
-изображения и обрабатывает classification head. Новому декодеру не требуется
-менять Segmenter, builders, конфигурационную схему или код инференса.
-
-Встроенный SegFormer — адаптация: линейные 1×1-проекции всех масштабов,
-bilinear resize к самому подробному масштабу, concat и 1×1 fusion с norm/ReLU.
-Дополнительная голова обучается на самой подробной проекции до fusion.
-U-Net сохраняет последовательный upsampling и skip connections baseline.
-
-## Эксперимент EMCAD
-
-Конфигурация: `configs/emcad_mixed_original.yaml`, запуск:
-`notebooks/emcad_mixed_original.ipynb`.
-
-```yaml
-  decoder_name: emcad
-  decoder_kwargs:
-    kernel_sizes: [1, 3, 5]
-    expansion_factor: 2
-    lgag_kernel_size: 3
-    activation: relu
-```
-
-Архитектура из [EMCAD, CVPR 2024](https://arxiv.org/abs/2405.06880):
-channel/spatial attention, параллельные depthwise-свёртки с суммированием,
-channel shuffle, residual, efficient upsampling и grouped attention gates
-на skip connections. Spatial attention разделяет веса между четырьмя стадиями.
-Требуются четыре уровня с шагами `[4, 8, 16, 32]` и чётным числом каналов.
-
-Адаптация сохраняет каналы энкодера и выдаёт признаки на шаге 4.
-Auxiliary head с весом 0.4 получает объединённые признаки перед последним
-refinement. Используется одна основная mask head, существующая classification
-head и loss проекта. Multi-head supervision авторов не воспроизводится.
-Инициализация — стандартная PyTorch, upsampling явно задаёт размер skip,
-что поддерживает нечётные размеры признаков. Это эксперимент с архитектурой
-EMCAD в baseline, а не воспроизведение результатов статьи.
-
-Для сверки архитектуры использован
-[репозиторий авторов](https://github.com/SLDGroup/EMCAD).
-Его исходный код распространяется под UT Austin Research License,
-а не MIT/Apache; здесь нет зависимости от установки этого репозитория
-или загрузки его обученных моделей.
-
-## Дополнительные вычисления после EMCAD
-
-Два независимых эксперимента наследуют `emcad_mixed_original.yaml`:
-
-| Конфиг и одноимённый ноутбук | Изменение | GFLOPS при 640 |
-| --- | --- | ---: |
-| `emcad_stride4_mixed_original` | Residual 3×3: 64→144→64 после последней стадии | 98.058314 |
-| `emcad_stride2_rgb_mixed_original` | RGB stride 2 (24 канала), fusion/refinement (32 канала), поправка к logits | 97.902666 |
-
-Опции в `model.decoder_kwargs`: `output_refinement_channels: 144` для первого;
-`rgb_refinement_channels: 32`, `rgb_detail_channels: 24` для второго.
-Одновременное включение двух вариантов отклоняется. При нулевых значениях
-новые обучаемые параметры отсутствуют и старые checkpoint keys сохраняются.
-
-Stride-2 блок объединяет RGB-признаки, увеличенные признаки EMCAD и coarse
-logits, затем прибавляет предсказанную поправку к coarse logits на stride 2.
-Финальное восстановление размера, classification gate и loss остаются общими.
-Auxiliary head EMCAD по-прежнему находится перед последней стадией; отдельного
-refinement loss нет. `output_stride` декодера описывает признаки (4), а не
-разрешение уточнённых логитов (2). Все новые параметры находятся в decoder
-и получают его learning rate.
-
-Числа измерены FlopCounterMode для полного eval forward, batch 1, на meta и
-CPU с SDPA math. Базовый EMCAD в том же режиме: 89.564848 GFLOPS.
-CPU fused SDPA даёт иной подсчёт; не смешивайте эти режимы сравнения.
-Лимит времени H100 отдельно не проверен. Обучение: исходный протокол 192 000
-показов, новые run names, без переноса весов родителя.
+Architecture reference: [EMCAD, CVPR 2024](https://arxiv.org/abs/2405.06880).

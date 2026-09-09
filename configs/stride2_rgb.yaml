@@ -1,6 +1,6 @@
-extends: emcad_mixed_original.yaml
+extends: baseline.yaml
 paths:
-  run_name: pvt_v2_b2_emcad_640_stride2_rgb_mixed_original
+  run_name: stride2_rgb
 model:
   decoder_kwargs:
     rgb_refinement_channels: 32

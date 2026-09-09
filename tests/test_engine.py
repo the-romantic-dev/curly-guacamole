@@ -129,6 +129,7 @@ def test_validate_accumulates_aic_histograms():
                 "image": image,
                 "fmap": torch.zeros(2, 12, 1, 1),
                 "mask": mask,
+                "original_mask": [m[0].bool() for m in mask],
             }
         ],
         amp,

@@ -25,7 +25,7 @@ def test_manifest_keeps_linked_originals_together_and_detects_edits(tmp_path):
     assert linked.role.nunique() == 1
     assert linked.group_id.nunique() == 1
     assert set(all_rows.role) == {'train', 'development', 'holdout'}
-    assert not protocol.rows('train').target_kind.eq('original_zero').any()
+    assert not protocol.rows('train', include_originals=False).target_kind.eq('original_zero').any()
     assert protocol.rows('development').target_kind.eq('original_zero').sum() <= 1
     p = tmp_path / 'protocol' / 'samples.parquet'
     edited = pd.read_parquet(p)
@@ -52,6 +52,7 @@ def test_frozen_validation_uses_requested_thresholds_not_best():
                      model=replace(config.model, aux_weight=0),
                      eval=replace(config.eval, mask_thresholds=(.5,), cls_thresholds=(0.,), min_areas=(0.,)))
     batch = dict(image=torch.zeros(2, 3, 8, 8), mask=torch.cat([torch.ones(1, 1, 8, 8), torch.zeros(1, 1, 8, 8)]))
+    batch['original_mask'] = [m[0].bool() for m in batch['mask']]
     result = validate(Model(), [batch], build_amp(config.train), config, torch.device('cpu'),
                       thresholds=ThresholdConfig(.75, 0., 0.))
     assert result.tuned.mask_threshold == .75
@@ -65,7 +66,7 @@ def test_protocol_config_routes_training_only_to_train_and_development(tmp_path)
     from src.training.engine import ExperimentRunner
 
     protocol = EvaluationProtocol.create(tmp_path / 'p', sample_rows(), pd.DataFrame(), pd.DataFrame())
-    raw = load_experiment_config('configs/baseline_mixed_original.yaml').to_dict()
+    raw = load_experiment_config('configs/baseline.yaml').to_dict()
     raw['dataset']['protocol_path'] = str(protocol.path)
     config = ExperimentConfig.from_dict(raw)
     train, dev = ExperimentRunner(config)._split_data()

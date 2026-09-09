@@ -27,7 +27,9 @@ class ExperimentRegistry:
         self.issues: list[str] = []
         self._rows: list[dict] = []
         for folder in sorted(self.root.iterdir()):
-            if not folder.is_dir() or folder.name.startswith((".", "__")):
+            if not folder.is_dir() or folder.name == 'archive' or folder.name.startswith((".", "__")):
+                continue
+            if (folder / 'protocol' / 'protocol.json').is_file():
                 continue
             status = "missing"
             try:

@@ -7,7 +7,7 @@ from src.losses import compute_loss
 
 def test_rgb_only_ignores_maps():
     torch.set_num_threads(2)
-    cfg = load_experiment_config('configs/segformer_mixed_original.yaml')
+    cfg = load_experiment_config('configs/baseline.yaml')
     model = build_model(replace(cfg.model, use_forensics=False), pretrained=False).eval()
     assert model.forensic_fusion is None
     image = torch.randn(2, 3, 64, 64)
@@ -20,7 +20,7 @@ def test_rgb_only_ignores_maps():
 
 def test_dct_aux_trains_branch_with_closed_gates():
     torch.set_num_threads(2)
-    cfg = load_experiment_config('configs/segformer_mixed_original.yaml')
+    cfg = load_experiment_config('configs/baseline.yaml')
     model = build_model(replace(cfg.model, dct_aux_weight=0.2), pretrained=False).train()
     batch = dict(mask=torch.rand(2, 1, 64, 64), label=torch.ones(2, 1))
     out = model(torch.randn(2, 3, 64, 64), torch.randn(2, 12, 8, 8))
@@ -37,9 +37,9 @@ def test_dct_aux_trains_branch_with_closed_gates():
 
 def test_experiment_configs_roundtrip():
     from src.inference.submission import InferenceConfig
-    baseline = load_experiment_config('configs/segformer_mixed_original.yaml')
-    for name in ('rgb_only', 'dct_aux'):
-        cfg = load_experiment_config(f'configs/segformer_640_{name}_mixed_original.yaml')
+    baseline = load_experiment_config('configs/baseline.yaml')
+    for name in ('dct_aux',):
+        cfg = load_experiment_config(f'configs/{name}.yaml')
         assert cfg.train == baseline.train
         assert cfg.dataset.image_size == 640
         assert cfg.dataset == baseline.dataset
@@ -68,7 +68,7 @@ def test_rgb_dataset_and_predictor_without_maps(tmp_path, monkeypatch):
     ds = module.AIIJCDataset(workspace, pd.DataFrame({'img_path': ['a.jpg']}),
                             False, 64, 42, mode='test', use_forensics=False)
     assert 'fmap' not in ds[0]
-    cfg = load_experiment_config('configs/segformer_640_rgb_only_mixed_original.yaml')
+    cfg = load_experiment_config('configs/baseline.yaml')
     model = build_model(cfg.model, pretrained=False)
     predictor = Predictor(model, ThresholdConfig(), AmpContext(torch.device('cpu'), torch.float32, False, False))
     results = list(predictor.predict(torch.utils.data.DataLoader(ds)))

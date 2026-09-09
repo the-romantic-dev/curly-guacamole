@@ -60,16 +60,14 @@ def build_model(config: ModelConfig, *, pretrained: bool = True) -> Segmenter:
 
     return Segmenter(
         encoder_name=config.encoder_name,
-        decoder_channels=config.decoder_channels,
         forensic_channels=config.forensic_channels,
         norm=config.norm,
         aux_weight=config.aux_weight,
         use_forensics=config.use_forensics,
         dct_aux_weight=config.dct_aux_weight,
         pretrained=pretrained,
-        decoder_name=config.decoder_name,
-        decoder_embed_dim=config.decoder_embed_dim,
         decoder_kwargs=config.decoder_kwargs,
+        local_image_size=config.local_image_size,
     )
 
 
@@ -79,8 +77,7 @@ def build_datasets(
     train_df,
     val_df,
 ) -> tuple[AIIJCDataset, AIIJCDataset]:
-    augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs,
-                                        jpeg_qtable_order=config.dataset.jpeg_qtable_order)
+    augmentations = AugmentationPipeline(config.augmentation, total_epochs=config.train.epochs)
 
     train_ds = AIIJCDataset(
         data_workspace=data_workspace,
@@ -92,8 +89,8 @@ def build_datasets(
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
         mode="train",
-        jpeg_qtable_order=config.dataset.jpeg_qtable_order,
         resize_mode=config.dataset.resize_mode,
+        local_image_size=config.model.local_image_size,
     )
 
     val_ds = AIIJCDataset(
@@ -106,9 +103,9 @@ def build_datasets(
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
         mode="val",
-        jpeg_qtable_order=config.dataset.jpeg_qtable_order,
         resize_mode=config.dataset.resize_mode,
-        original_targets=config.eval.resolution == "original",
+        original_targets=True,
+        local_image_size=config.model.local_image_size,
     )
 
     return train_ds, val_ds

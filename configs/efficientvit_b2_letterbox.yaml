@@ -1,5 +1,0 @@
-extends: efficientvit_b2_mixed_original.yaml
-paths:
-  run_name: efficientvit_b2_1024_letterbox
-dataset:
-  resize_mode: letterbox

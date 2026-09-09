@@ -1,5 +1,0 @@
-extends: segformer_mixed_original.yaml
-paths:
-  run_name: pvt_v2_b2_segformer_672_mixed_original
-dataset:
-  image_size: 672

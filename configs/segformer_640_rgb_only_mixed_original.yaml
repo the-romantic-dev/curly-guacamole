@@ -1,6 +1,0 @@
-extends: segformer_mixed_original.yaml
-paths:
-  run_name: pvt_v2_b2_segformer_640_rgb_only_mixed_original
-model:
-  use_forensics: false
-  dct_aux_weight: 0.0

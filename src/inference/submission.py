@@ -1,7 +1,7 @@
 """Build competition submission.csv and predictions/ from a saved run."""
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import numpy as np
@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from src.config import ModelConfig
+from src.config import ModelConfig, PIPELINE_VERSION
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
 from src.inference.predict import Prediction, Predictor, ThresholdConfig
@@ -81,25 +81,21 @@ class InferenceConfig:
     batch_size: int
     workers: int
     resize_mode: str = "stretch"
-    jpeg_qtable_order: str = "legacy_zigzag"
 
     @classmethod
     def from_snapshot(cls, snapshot: dict) -> "InferenceConfig":
         """Read both the training engine's flat snapshot and nested experiment configs."""
+        if snapshot.get('pipeline_version') != PIPELINE_VERSION:
+            raise ValueError('Unsupported pipeline snapshot; evaluate historical runs with the main branch')
         model = snapshot.get("model", snapshot)
         dataset = snapshot.get("dataset", snapshot)
         paths = snapshot.get("paths", snapshot)
         train = snapshot.get("train", snapshot)
         return cls(
-            ModelConfig.from_dict({key: model[key] for key in (
-                "encoder_name", "decoder_channels", "forensic_channels", "aux_weight", "norm",
-                "decoder_name", "decoder_embed_dim",
-                "decoder_kwargs", "use_forensics", "dct_aux_weight",
-            ) if key in model}),
+            ModelConfig.from_dict({f.name: model[f.name] for f in fields(ModelConfig) if f.name in model}),
             int(dataset["image_size"]), int(snapshot["seed"]), Path(paths["data_path"]),
             train["device"], train["amp"], int(train["batch_size"]), int(train["workers"]),
             str(dataset.get("resize_mode", "stretch")),
-            str(dataset.get("jpeg_qtable_order", "legacy_zigzag")),
         )
 
 
@@ -133,7 +129,7 @@ def create_submission(
     writer = SubmissionWriter(template, test_rows, output_dir)
     dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed,
                            mode="test", resize_mode=config.resize_mode,
-                           jpeg_qtable_order=config.jpeg_qtable_order,
+                           local_image_size=config.model.local_image_size,
                            use_forensics=config.model.use_forensics)
     inference_device = torch.device(device or config.device)
     ConsoleProgress.info(

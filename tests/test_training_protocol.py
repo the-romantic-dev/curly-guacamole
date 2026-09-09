@@ -56,7 +56,7 @@ def test_foreground_crop_keeps_small_gt_and_dct_alignment():
 
 
 def test_mixed_frames_and_final_full_frame_epochs():
-    config = AugmentationConfig((0.15, 0.2), 0.0, (60, 100), False,
+    config = AugmentationConfig((0.15, 0.2), 0.0, (60, 100),
                                 full_frame_probability=0.5, final_full_frame_epochs=2)
     pipeline = AugmentationPipeline(config, total_epochs=8)
     sample = sample_with_small_mask()
@@ -70,16 +70,13 @@ def test_mixed_frames_and_final_full_frame_epochs():
         assert pipeline.apply(AugmentationStage.AFTER_FORENSICS, sample, rng).image.shape == sample.image.shape
 
 
-def test_new_options_roundtrip_and_legacy_defaults():
+def test_mixed_defaults_and_overrides_roundtrip():
     config = load_experiment_config("configs/baseline.yaml")
-    assert config.augmentation.full_frame_probability == 0.0
-    assert config.eval.resolution == "resized"
+    assert config.augmentation.full_frame_probability == 0.5
     raw = config.to_dict()
     raw["augmentation"].update(full_frame_probability=0.5, foreground_crop_probability=0.5,
                                final_full_frame_epochs=2)
-    raw["eval"]["resolution"] = "original"
     updated = ExperimentConfig.from_dict(raw)
-    assert updated.eval.resolution == "original"
     assert ExperimentConfig.from_dict(updated.to_dict()) == updated
 
 
@@ -89,11 +86,11 @@ def test_resume_rejects_changed_validation_before_overwriting_run(tmp_path):
 
     config = load_experiment_config("configs/baseline.yaml")
     config = replace(config, paths=replace(config.paths, runs_path=tmp_path),
-                     eval=replace(config.eval, resolution="original"))
+                     train=replace(config.train, resume=True))
     run = Run.create(tmp_path, config.paths.run_name, tensorboard=False)
     run.save_snapshot({"resolution": "resized"})
     (run.dir / "ckpt" / "last.pt").touch()
-    with pytest.raises(ValueError, match="resolution"):
+    with pytest.raises(ValueError, match="pipeline"):
         ExperimentRunner(config)._check_resume_protocol()
     assert run.snapshot == {"resolution": "resized"}
 
@@ -110,7 +107,7 @@ def test_original_validation_matches_submission_for_mixed_sizes():
 
     config = load_experiment_config("configs/baseline.yaml")
     config = replace(config, train=replace(config.train, device="cpu", amp="off"),
-                     eval=replace(config.eval, resolution="original", mask_thresholds=(0.5,),
+                     eval=replace(config.eval, mask_thresholds=(0.5,),
                                   cls_thresholds=(0.0,), min_areas=(0.0,)))
     amp = build_amp(config.train)
     image = torch.tensor([[[[-2., 2.], [-2., 2.]]]]).repeat(2, 3, 1, 1)

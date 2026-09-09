@@ -1,9 +1,0 @@
-extends: baseline.yaml
-paths:
-  run_name: pvt_v2_b2_mixed_original
-augmentation:
-  full_frame_probability: 0.5
-  foreground_crop_probability: 0.5
-  final_full_frame_epochs: 2
-eval:
-  resolution: original

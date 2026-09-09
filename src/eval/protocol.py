@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import global_config
 
 from src.eval.splits import make_stratified_val_folds
 
@@ -93,7 +94,8 @@ class EvaluationProtocol:
 
     @classmethod
     def load(cls, path):
-        path = Path(path).resolve()
+        path = Path(path)
+        path = (path if path.is_absolute() else global_config.PROJECT_ROOT / path).resolve()
         manifest = json.loads((path / 'protocol.json').read_text(encoding='utf-8'))
         if manifest.get('version') != 1:
             raise ValueError('Unsupported protocol version')
@@ -120,19 +122,19 @@ class EvaluationProtocol:
     def rows(self, role: str, *, include_originals: bool | None = None) -> pd.DataFrame:
         if role not in self.ROLES:
             raise ValueError(f'Unknown role: {role}')
-        include_originals = role != 'train' if include_originals is None else include_originals
+        include_originals = True if include_originals is None else include_originals
         frames = [self.samples.loc[self.samples.role == role]]
         if include_originals and not self.originals.empty:
             frames.append(self.originals.loc[self.originals.role == role])
         return pd.concat(frames, ignore_index=True)
 
-    def provenance(self, *, train_originals=False) -> dict:
-        return dict(protocol_digest=self.digest, training_originals=train_originals,
-                    training_rows_digest=rows_digest(self.rows('train', include_originals=train_originals)),
+    def provenance(self) -> dict:
+        return dict(protocol_digest=self.digest, training_originals=True,
+                    training_rows_digest=rows_digest(self.rows('train')),
                     development_rows_digest=rows_digest(self.rows('development')))
 
     def verify_run(self, snapshot: dict) -> None:
-        expected = self.provenance(train_originals=snapshot.get('training_originals', False))
+        expected = self.provenance()
         for key, value in expected.items():
             if snapshot.get(key) != value:
                 raise ValueError(f'Run {key} does not match protocol; historical training cannot claim independent holdout')

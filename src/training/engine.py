@@ -9,12 +9,10 @@ import torch
 from torch import nn
 
 from src.budget import count_gflops
-from src.config import ExperimentConfig
+from src.config import ExperimentConfig, PIPELINE_VERSION
 from src.data.data_workspace import DataWorkspace
 from src.eval.diagnostics import EvaluationReport
-from src.eval.metadata import build_metadata
 from src.eval.protocol import EvaluationProtocol
-from src.eval.splits import make_stratified_val_folds, train_val_fold_split
 from src.forensic.dct.constants import CHANNELS as FMAP_CHANNELS
 from src.losses import LossMeter, SegmentationLoss
 from src.progress import ConsoleProgress
@@ -88,13 +86,12 @@ class ExperimentRunner:
         ConsoleProgress.info("Создание папки эксперимента и сохранение конфигурации")
         run = Run.create(cfg.paths.runs_path, cfg.paths.run_name, resume=cfg.train.resume)
         plain_config = cfg.to_flat_dict()
-        if cfg.dataset.protocol_path:
-            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
-            plain_config.update(protocol.provenance(train_originals=cfg.dataset.train_originals))
-            train_df.to_parquet(run.dir / 'training_rows.parquet', index=False)
-            val_df.to_parquet(run.dir / 'development_rows.parquet', index=False)
-            run.save_summary({'evaluation_role': 'development', 'protocol_digest': protocol.digest,
-                              'holdout_evaluated': False, 'training_complete': False})
+        protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
+        plain_config.update(protocol.provenance())
+        train_df.to_parquet(run.dir / 'training_rows.parquet', index=False)
+        val_df.to_parquet(run.dir / 'development_rows.parquet', index=False)
+        run.save_summary({'evaluation_role': 'development', 'protocol_digest': protocol.digest,
+                          'holdout_evaluated': False, 'training_complete': False})
         run.save_snapshot(self._snapshot(plain_config, gflops))
         run.info(f"{cfg.paths.run_name}, {gflops} GFLOPS")
 
@@ -115,7 +112,7 @@ class ExperimentRunner:
                 train_loader.sampler.generator = torch.Generator().manual_seed(cfg.seed + epoch)
                 started = time.time()
                 run.info(f"Полные кадры: p={train_ds.augmentations.full_frame_probability:.2f}; "
-                         f"валидация: {cfg.eval.resolution}")
+                         "валидация: original")
                 run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение")
                 train_result = train_one_epoch(
                     model=model,
@@ -164,10 +161,9 @@ class ExperimentRunner:
                     )
                     run.info("Сохранение OOF-предсказаний, строк валидации и метрик")
                     run.save_eval(validation, val_df)
-                    if cfg.dataset.protocol_path:
-                        report = EvaluationReport(validation.accumulator, val_df, tuned)
-                        report.save(run.dir / 'development')
-                        run.save_summary({'development': report.summary()})
+                    report = EvaluationReport(validation.accumulator, val_df, tuned)
+                    report.save(run.dir / 'development')
+                    run.save_summary({'development': report.summary()})
                     run.info(f"  новый лучший AIC {state.best_aic:.4f} -> ckpt/best.pt")
 
                 run.info("Сохранение checkpoint для продолжения: ckpt/last.pt")
@@ -204,68 +200,33 @@ class ExperimentRunner:
         if (run_dir / 'holdout_claim.json').exists():
             raise ValueError('Cannot resume a run after holdout evaluation was claimed; choose a new run_name')
         snapshot = Run.open(run_dir).snapshot
-        saved_eval = snapshot.get("eval", snapshot)
-        saved_dataset = snapshot.get("dataset", snapshot)
-        if saved_dataset.get('protocol_path') != cfg.dataset.protocol_path:
-            raise ValueError('Cannot resume with a different dataset.protocol_path; choose a new run_name')
-        if cfg.dataset.protocol_path:
-            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
-            protocol.verify_run(snapshot)
-            if saved_dataset.get('train_originals', False) != cfg.dataset.train_originals:
-                raise ValueError('Cannot resume with different train_originals')
-        if saved_dataset.get("jpeg_qtable_order", "legacy_zigzag") != cfg.dataset.jpeg_qtable_order:
-            raise ValueError("Cannot resume with a different dataset.jpeg_qtable_order; choose a new run_name")
-        if saved_dataset.get("resize_mode", "stretch") != cfg.dataset.resize_mode:
-            raise ValueError("Cannot resume with a different dataset.resize_mode; choose a new run_name")
-        if saved_eval.get("resolution", "resized") != cfg.eval.resolution:
-            raise ValueError("Cannot resume with a different eval.resolution; choose a new run_name")
-        saved_loss = snapshot.get("loss", snapshot)
-        for key, default in (("dice_scope", "all"), ("dice_weight", 1.0)):
-            if saved_loss.get(key, default) != getattr(cfg.loss, key):
-                raise ValueError(f"Cannot resume with a different loss.{key}; choose a new run_name")
-        saved_model = snapshot.get("model", snapshot)
-        for key, default in (("aux_weight", .4), ("dct_aux_weight", 0.0)):
-            if saved_model.get(key, default) != getattr(cfg.model, key):
-                raise ValueError(f"Cannot resume with different loss weight model.{key}; choose a new run_name")
-        saved_aug = snapshot.get("augmentation", snapshot)
-        for key, default in (("full_frame_probability", 0.0),
-                             ("foreground_crop_probability", 0.0),
-                             ("final_full_frame_epochs", 0)):
-            if saved_aug.get(key, default) != getattr(cfg.augmentation, key):
-                raise ValueError(f"Cannot resume with a different augmentation.{key}; choose a new run_name")
+        if snapshot.get('pipeline_version') != PIPELINE_VERSION:
+            raise ValueError('Cannot resume a historical pipeline; choose a new run_name')
+        current = cfg.to_flat_dict()
+        saved_dataset = snapshot.get('dataset', snapshot)
+        for key in ('image_size', 'resize_mode', 'protocol_path'):
+            if saved_dataset.get(key) != current[key]:
+                raise ValueError(f'Cannot resume with a different dataset.{key}; choose a new run_name')
+        for section in ('model', 'loss', 'augmentation'):
+            values = cfg.to_dict()[section]
+            saved_values = snapshot.get(section, snapshot)
+            for key, value in values.items():
+                previous = saved_values.get(key)
+                if isinstance(value, tuple) and isinstance(previous, list):
+                    previous = tuple(previous)
+                if previous != value:
+                    raise ValueError(f'Cannot resume with a different {section}.{key}; choose a new run_name')
+        EvaluationProtocol.load(cfg.dataset.protocol_path).verify_run(snapshot)
 
     def _split_data(self):
         cfg = self.config
-        if cfg.dataset.protocol_path:
-            if cfg.eval.resolution != 'original':
-                raise ValueError('Independent protocol requires original-resolution evaluation')
-            protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
-            development = EvaluationReport.add_jpeg_metadata(protocol.rows('development'),
-                                                             self.data_workspace.train_root, cfg.train.workers)
-            return protocol.rows('train', include_originals=cfg.dataset.train_originals), development
-        metadata = build_metadata(self.data_workspace, workers=cfg.train.workers)
-        ConsoleProgress.info(f"Метаданные готовы: {len(metadata)} строк; построение {cfg.dataset.n_folds} фолдов, val fold={cfg.dataset.fold}")
-        folds = make_stratified_val_folds(
-            metadata,
-            n_folds=cfg.dataset.n_folds,
-            seed=cfg.seed,
-        )
-        return train_val_fold_split(folds, fold=cfg.dataset.fold)
+        protocol = EvaluationProtocol.load(cfg.dataset.protocol_path)
+        development = EvaluationReport.add_jpeg_metadata(protocol.rows('development'),
+                                                         self.data_workspace.train_root, cfg.train.workers)
+        return protocol.rows('train'), development
 
     def _snapshot(self, plain_config: dict, gflops: float) -> dict:
-        cfg = self.config
-        return {
-            **plain_config,
-            "arm": self.arm,
-            "decoder_channels": list(cfg.model.decoder_channels),
-            "fmap_ch": list(cfg.model.forensic_channels),
-            "crop_scale": list(cfg.augmentation.crop_scale_range),
-            "fmap_drop": [],
-            "fmap_channels": FMAP_CHANNELS,
-            "num_workers": cfg.train.workers,
-            "probe_auc": None,
-            "gflops": round(gflops, 1),
-        }
+        return {**plain_config, 'arm': self.arm, 'fmap_channels': FMAP_CHANNELS, 'gflops': round(gflops, 3)}
 
     def _resume_if_needed(
         self,
@@ -370,7 +331,7 @@ class ExperimentRunner:
                 "samples": state.seen_total,
                 "gflops": round(gflops, 1),
                 "within_limit": gflops <= 100,
-                "validation_resolution": self.config.eval.resolution,
+                "validation_resolution": "original",
                 "training_complete": True,
             }
         )
@@ -406,6 +367,8 @@ def train_one_epoch(
 
         with amp.autocast():
             model_kwargs = {"valid_mask": batch["valid_mask"]} if "valid_mask" in batch else {}
+            if 'local_input' in batch:
+                model_kwargs['local_input'] = batch['local_input']
             loss_result = criterion(
                 model(images, batch.get("fmap"), **model_kwargs),
                 batch,

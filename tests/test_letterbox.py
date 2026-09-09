@@ -83,8 +83,10 @@ def test_unpadding_precedes_restore_and_area_gate():
 def test_letterbox_experiment_is_separate_and_serialized():
     from src.config import ExperimentConfig, load_experiment_config
     from src.inference.submission import InferenceConfig
-    base = load_experiment_config("configs/efficientvit_b2_mixed_original.yaml")
-    config = load_experiment_config("configs/efficientvit_b2_letterbox.yaml")
+    base = load_experiment_config("configs/baseline.yaml")
+    base = load_experiment_config("configs/baseline.yaml")
+    config = replace(base, dataset=replace(base.dataset, resize_mode="letterbox"),
+                     paths=replace(base.paths, run_name="letterbox_check"))
     assert config.dataset == replace(base.dataset, resize_mode="letterbox")
     assert config.paths.run_name != base.paths.run_name
     assert config.train == base.train
@@ -93,8 +95,7 @@ def test_letterbox_experiment_is_separate_and_serialized():
     assert InferenceConfig.from_snapshot(config.to_flat_dict()).resize_mode == "letterbox"
 
 
-@pytest.mark.parametrize("resolution", ["original", "resized"])
-def test_validation_and_predictor_ignore_padding_end_to_end(resolution):
+def test_validation_and_predictor_ignore_padding_end_to_end():
     from src.config import load_experiment_config
     from src.inference.predict import Predictor, ThresholdConfig
     from src.training.builders import build_amp
@@ -105,9 +106,11 @@ def test_validation_and_predictor_ignore_padding_end_to_end(resolution):
             assert valid_mask is not None
             return {"logits": image[:, :1], "cls_logits": torch.full((len(image), 1), 10.)}
 
-    config = load_experiment_config("configs/efficientvit_b2_letterbox.yaml")
+    base = load_experiment_config("configs/baseline.yaml")
+    config = replace(base, dataset=replace(base.dataset, resize_mode="letterbox"),
+                     paths=replace(base.paths, run_name="letterbox_check"))
     config = replace(config, train=replace(config.train, device="cpu", amp="off"),
-                     eval=replace(config.eval, resolution=resolution, mask_thresholds=(.5,),
+                     eval=replace(config.eval, mask_thresholds=(.5,),
                                   cls_thresholds=(0.,), min_areas=(0.,)))
     valid = torch.zeros(2, 1, 8, 8, dtype=torch.bool)
     valid[0, :, :4, :] = True
@@ -124,7 +127,7 @@ def test_validation_and_predictor_ignore_padding_end_to_end(resolution):
     result = validate(MaskModel(), [batch], amp, config, torch.device("cpu"))
     assert result.tuned.aic > .999
     assert result.tuned.fpr_neg == 0
-    assert result.accumulator.n_pixels == ([72,72] if resolution == "original" else [32,32])
+    assert result.accumulator.n_pixels == [72,72]
     predictions = list(Predictor(MaskModel(), ThresholdConfig(), amp).predict([batch]))
     assert np.all(predictions[0].mask == 255)
     assert not predictions[1].mask.any()
@@ -140,14 +143,14 @@ def test_full_valid_mask_matches_legacy_loss():
 
 
 def test_letterbox_flops_include_masked_classification():
-    from torch._subclasses.fake_tensor import FakeTensorMode
-
     from src.budget import count_gflops
     from src.config import load_experiment_config
     from src.training.builders import build_model
 
-    config = load_experiment_config("configs/efficientvit_b2_letterbox.yaml")
-    with FakeTensorMode():
+    base = load_experiment_config("configs/baseline.yaml")
+    config = replace(base, dataset=replace(base.dataset, resize_mode="letterbox"),
+                     paths=replace(base.paths, run_name="letterbox_check"))
+    with torch.device('meta'):
         model = build_model(config.model, pretrained=False).eval()
         flops = count_gflops(model, config.dataset.image_size, use_valid_mask=True)
     assert flops < 100

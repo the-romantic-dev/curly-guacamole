@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -11,512 +12,286 @@ from dotenv import dotenv_values
 
 import global_config
 from src.data.augmentation.base import AugmentationConfig
-from src.training.metric import DEFAULT_AREA_GRID, DEFAULT_CLS_GRID, DEFAULT_MASK_GRID
+from src.training.metric import DEFAULT_MASK_GRID
+
+PIPELINE_VERSION = 'emcad_v1'
+DEFAULT_PROTOCOL_PATH = 'runs/validation_protocol_20260908/protocol'
+
+
+class ConfigSection:
+    """Strict keys with dataclass defaults; snapshots contain resolved values."""
+
+    @classmethod
+    def from_dict(cls, data):
+        data = _mapping(data, cls.__name__)
+        section = cls.__name__.removesuffix('Config').lower()
+        _check_keys(data, set(), section, optional={f.name for f in fields(cls)})
+        return cls(**_float_fields(cls, data))
+
+    def to_dict(self):
+        return asdict(self)
 
 
 @dataclass(frozen=True)
-class PathsConfig:
+class PathsConfig(ConfigSection):
     data_path: Path
     runs_path: Path
     run_name: str
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], *, base_dir: Path) -> PathsConfig:
-        data = _mapping(data, "paths")
-        # Accept old snapshots, but resolve storage for the current machine.
-        _check_keys(data, {"run_name"}, "paths", optional={"data_path", "runs_path"})
-        settings = {**dotenv_values(global_config.PROJECT_ROOT / ".env"), **os.environ}
+    def from_dict(cls, data, *, base_dir=Path('.')):
+        data = _mapping(data, 'paths')
+        _check_keys(data, {'run_name'}, 'paths', optional={'data_path', 'runs_path'})
+        settings = {**dotenv_values(global_config.PROJECT_ROOT / '.env'), **os.environ}
         return cls(
-            data_path=_path(settings.get("AIIJC_DATA_PATH") or global_config.DATA_PATH, global_config.PROJECT_ROOT),
-            runs_path=_path(settings.get("AIIJC_RUNS_PATH") or global_config.RUNS_PATH, global_config.PROJECT_ROOT),
-            run_name=_non_empty_str(_required(data, "run_name", "paths"), "paths.run_name"),
+            _path(settings.get('AIIJC_DATA_PATH') or global_config.DATA_PATH, global_config.PROJECT_ROOT),
+            _path(settings.get('AIIJC_RUNS_PATH') or global_config.RUNS_PATH, global_config.PROJECT_ROOT),
+            _non_empty_str(data['run_name'], 'paths.run_name'),
         )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "data_path": str(self.data_path),
-            "runs_path": str(self.runs_path),
-            "run_name": self.run_name,
-        }
-
-
-@dataclass(frozen=True)
-class ModelConfig:
-    encoder_name: str
-    decoder_channels: tuple[int, ...]
-    forensic_channels: tuple[int, ...]
-    aux_weight: float
-    norm: str
-    use_forensics: bool = True
-    dct_aux_weight: float = 0.0
-    decoder_name: str = "unet"
-    decoder_embed_dim: int = 128
-    decoder_kwargs: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> ModelConfig:
-        data = _mapping(data, "model")
-        _check_keys(
-            data,
-            {"encoder_name", "forensic_channels", "aux_weight", "norm"},
-            "model",
-            optional={"use_forensics", "dct_aux_weight", "decoder_name", "decoder_channels", "decoder_embed_dim", "decoder_kwargs"},
-        )
-        config = cls(
-            encoder_name=_non_empty_str(_required(data, "encoder_name", "model"), "model.encoder_name"),
-            decoder_channels=_int_tuple(data.get("decoder_channels", (128, 64, 32, 16, 16)), "model.decoder_channels"),
-            forensic_channels=_int_tuple(_required(data, "forensic_channels", "model"), "model.forensic_channels"),
-            aux_weight=float(_required(data, "aux_weight", "model")),
-            norm=_non_empty_str(_required(data, "norm", "model"), "model.norm"),
-            use_forensics=data.get("use_forensics", True),
-            dct_aux_weight=float(data.get("dct_aux_weight", 0.0)),
-            decoder_name=str(data.get("decoder_name", "unet")),
-            decoder_embed_dim=int(data.get("decoder_embed_dim", 128)),
-            decoder_kwargs=dict(_mapping(data.get("decoder_kwargs", {}), "model.decoder_kwargs")),
-        )
-        if not isinstance(config.use_forensics, bool):
-            raise ValueError("model.use_forensics must be boolean")
-        if not 0 <= config.dct_aux_weight < float("inf"):
-            raise ValueError("model.dct_aux_weight must be finite and non-negative")
-        if config.dct_aux_weight > 0 and not config.use_forensics:
-            raise ValueError("DCT auxiliary head requires use_forensics")
-        if not config.decoder_channels:
-            raise ValueError("model.decoder_channels must not be empty")
-        if not config.decoder_name.strip():
-            raise ValueError("model.decoder_name must not be empty")
-        reserved = {"encoder_channels", "encoder_strides", "norm", "use_aux"}
-        if reserved.intersection(config.decoder_kwargs):
-            raise ValueError("model.decoder_kwargs must not override encoder metadata, norm or use_aux")
-        if config.decoder_embed_dim <= 0:
-            raise ValueError("model.decoder_embed_dim must be positive")
-        if len(config.forensic_channels) != 3:
-            raise ValueError("model.forensic_channels must contain exactly 3 values")
-        if config.aux_weight < 0:
-            raise ValueError("model.aux_weight must be non-negative")
-        if config.norm not in {"batch", "group"}:
-            raise ValueError("model.norm must be 'batch' or 'group'")
-        return config
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "encoder_name": self.encoder_name,
-            "decoder_channels": self.decoder_channels,
-            "forensic_channels": self.forensic_channels,
-            "aux_weight": self.aux_weight,
-            "norm": self.norm,
-            "use_forensics": self.use_forensics,
-            "dct_aux_weight": self.dct_aux_weight,
-            "decoder_name": self.decoder_name,
-            "decoder_embed_dim": self.decoder_embed_dim,
-            "decoder_kwargs": dict(self.decoder_kwargs),
-        }
-
-
-@dataclass(frozen=True)
-class DatasetConfig:
-    fold: int
-    n_folds: int
-    image_size: int
-    resize_mode: str = "stretch"
-    jpeg_qtable_order: str = "legacy_zigzag"
-    protocol_path: str | None = None
-    train_originals: bool = False
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> DatasetConfig:
-        data = _mapping(data, "dataset")
-        _check_keys(data, {"fold", "n_folds", "image_size"}, "dataset", optional={"resize_mode", "jpeg_qtable_order", "protocol_path", "train_originals"})
-        config = cls(
-            fold=int(_required(data, "fold", "dataset")),
-            n_folds=int(_required(data, "n_folds", "dataset")),
-            image_size=int(_required(data, "image_size", "dataset")),
-            resize_mode=str(data.get("resize_mode", "stretch")),
-            jpeg_qtable_order=str(data.get("jpeg_qtable_order", "legacy_zigzag")),
-            protocol_path=data.get("protocol_path"),
-            train_originals=data.get("train_originals", False),
-        )
-        if config.n_folds < 2:
-            raise ValueError("dataset.n_folds must be at least 2")
-        if config.protocol_path is not None and (not isinstance(config.protocol_path, str) or not config.protocol_path.strip()):
-            raise ValueError('dataset.protocol_path must be a nonempty string')
-        if not isinstance(config.train_originals, bool) or (config.train_originals and config.protocol_path is None):
-            raise ValueError('dataset.train_originals requires a protocol_path and boolean value')
-        if config.jpeg_qtable_order not in {"natural", "legacy_zigzag"}:
-            raise ValueError("dataset.jpeg_qtable_order must be 'natural' or 'legacy_zigzag'")
-        if config.resize_mode not in {"stretch", "letterbox"}:
-            raise ValueError("dataset.resize_mode must be 'stretch' or 'letterbox'")
-        if not 0 <= config.fold < config.n_folds:
-            raise ValueError("dataset.fold must be in [0, n_folds)")
-        if config.image_size < 8 or config.image_size % 8 != 0:
-            raise ValueError("dataset.image_size must be divisible by 8 and at least 8")
-        return config
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "fold": self.fold,
-            "n_folds": self.n_folds,
-            "image_size": self.image_size,
-            "resize_mode": self.resize_mode,
-            "jpeg_qtable_order": self.jpeg_qtable_order,
-            "protocol_path": self.protocol_path,
-            "train_originals": self.train_originals,
-        }
-
-
-@dataclass(frozen=True)
-class TrainConfig:
-    device: str
-    workers: int
-    encoder_lr: float
-    fmap_lr: float
-    lr: float
-    weight_decay: float
-    epochs: int
-    epoch_size: int
-    val_frac: float
-    val_keep_negatives: bool
-    negative_fraction: float
-    batch_size: int
-    accum_steps: int
-    warmup_frac: float
-    min_lr_factor: float
-    amp: str
-    ema_decay: float
-    grad_clip: float
-    resume: bool
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> TrainConfig:
-        data = _mapping(data, "train")
-        _check_keys(
-            data,
-            {
-                "device",
-                "workers",
-                "encoder_lr",
-                "fmap_lr",
-                "lr",
-                "weight_decay",
-                "epochs",
-                "epoch_size",
-                "val_frac",
-                "val_keep_negatives",
-                "negative_fraction",
-                "batch_size",
-                "accum_steps",
-                "warmup_frac",
-                "min_lr_factor",
-                "amp",
-                "ema_decay",
-                "grad_clip",
-                "resume",
-            },
-            "train",
-        )
-        config = cls(
-            device=_non_empty_str(_required(data, "device", "train"), "train.device"),
-            workers=int(_required(data, "workers", "train")),
-            encoder_lr=float(_required(data, "encoder_lr", "train")),
-            fmap_lr=float(_required(data, "fmap_lr", "train")),
-            lr=float(_required(data, "lr", "train")),
-            weight_decay=float(_required(data, "weight_decay", "train")),
-            epochs=int(_required(data, "epochs", "train")),
-            epoch_size=int(_required(data, "epoch_size", "train")),
-            val_frac=float(_required(data, "val_frac", "train")),
-            val_keep_negatives=bool(_required(data, "val_keep_negatives", "train")),
-            negative_fraction=float(_required(data, "negative_fraction", "train")),
-            batch_size=int(_required(data, "batch_size", "train")),
-            accum_steps=int(_required(data, "accum_steps", "train")),
-            warmup_frac=float(_required(data, "warmup_frac", "train")),
-            min_lr_factor=float(_required(data, "min_lr_factor", "train")),
-            amp=_non_empty_str(_required(data, "amp", "train"), "train.amp"),
-            ema_decay=float(_required(data, "ema_decay", "train")),
-            grad_clip=float(_required(data, "grad_clip", "train")),
-            resume=bool(_required(data, "resume", "train")),
-        )
-        config.validate()
-        return config
-
-    def validate(self) -> None:
-        if not (self.device == "cpu" or self.device == "mps" or self.device.startswith("cuda")):
-            raise ValueError("train.device must be 'cpu', 'mps', 'cuda' or 'cuda:<index>'")
-        if self.workers < 0:
-            raise ValueError("train.workers must be non-negative")
-        if min(self.encoder_lr, self.fmap_lr, self.lr) <= 0:
-            raise ValueError("learning rates must be positive")
-        if self.weight_decay < 0:
-            raise ValueError("train.weight_decay must be non-negative")
-        if self.epochs <= 0:
-            raise ValueError("train.epochs must be positive")
-        if self.epoch_size <= 0:
-            raise ValueError("train.epoch_size must be positive")
-        if not 0.0 <= self.val_frac <= 1.0:
-            raise ValueError("train.val_frac must be in [0, 1]")
-        if not 0.0 < self.negative_fraction < 1.0:
-            raise ValueError("train.negative_fraction must be in (0, 1)")
-        if self.batch_size <= 0:
-            raise ValueError("train.batch_size must be positive")
-        if self.accum_steps <= 0:
-            raise ValueError("train.accum_steps must be positive")
-        if not 0.0 <= self.warmup_frac <= 1.0:
-            raise ValueError("train.warmup_frac must be in [0, 1]")
-        if not 0.0 <= self.min_lr_factor <= 1.0:
-            raise ValueError("train.min_lr_factor must be in [0, 1]")
-        if self.amp not in {"off", "fp16", "bf16"}:
-            raise ValueError("train.amp must be 'off', 'fp16' or 'bf16'")
-        if not 0.0 <= self.ema_decay < 1.0:
-            raise ValueError("train.ema_decay must be in [0, 1)")
-        if self.grad_clip < 0:
-            raise ValueError("train.grad_clip must be non-negative")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "device": self.device,
-            "workers": self.workers,
-            "encoder_lr": self.encoder_lr,
-            "fmap_lr": self.fmap_lr,
-            "lr": self.lr,
-            "weight_decay": self.weight_decay,
-            "epochs": self.epochs,
-            "epoch_size": self.epoch_size,
-            "val_frac": self.val_frac,
-            "val_keep_negatives": self.val_keep_negatives,
-            "negative_fraction": self.negative_fraction,
-            "batch_size": self.batch_size,
-            "accum_steps": self.accum_steps,
-            "warmup_frac": self.warmup_frac,
-            "min_lr_factor": self.min_lr_factor,
-            "amp": self.amp,
-            "ema_decay": self.ema_decay,
-            "grad_clip": self.grad_clip,
-            "resume": self.resume,
-        }
-
-
-@dataclass(frozen=True)
-class EvalConfig:
-    n_bins: int = 256
-    mask_thresholds: tuple[float, ...] = DEFAULT_MASK_GRID
-    cls_thresholds: tuple[float, ...] = DEFAULT_CLS_GRID
-    min_areas: tuple[float, ...] = DEFAULT_AREA_GRID
-    resolution: str = "resized"
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, Any] | None) -> EvalConfig:
-        defaults = cls()
-        if data is None:
-            return defaults
-        data = _mapping(data, "eval")
-        _check_keys(data, {"n_bins", "mask_thresholds", "cls_thresholds", "min_areas"}, "eval",
-                    optional={"resolution"})
-        config = cls(
-            n_bins=int(data.get("n_bins", defaults.n_bins)),
-            mask_thresholds=_float_tuple(data.get("mask_thresholds", defaults.mask_thresholds), "eval.mask_thresholds"),
-            cls_thresholds=_float_tuple(data.get("cls_thresholds", defaults.cls_thresholds), "eval.cls_thresholds"),
-            min_areas=_float_tuple(data.get("min_areas", defaults.min_areas), "eval.min_areas"),
-            resolution=str(data.get("resolution", defaults.resolution)),
-        )
-        config.validate()
-        return config
-
-    def validate(self) -> None:
-        if self.n_bins <= 0:
-            raise ValueError("eval.n_bins must be positive")
-        if self.resolution not in {"resized", "original"}:
-            raise ValueError("eval.resolution must be 'resized' or 'original'")
-        _check_probability_grid(self.mask_thresholds, "eval.mask_thresholds")
-        _check_probability_grid(self.cls_thresholds, "eval.cls_thresholds")
-        _check_probability_grid(self.min_areas, "eval.min_areas")
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "n_bins": self.n_bins,
-            "mask_thresholds": self.mask_thresholds,
-            "cls_thresholds": self.cls_thresholds,
-            "min_areas": self.min_areas,
-            "resolution": self.resolution,
-        }
-
-
-@dataclass(frozen=True)
-class LossConfig:
-    # Missing settings preserve historical runs. New ablations opt in explicitly.
-    dice_scope: str = "all"
-    dice_weight: float = 1.0
-
-    @classmethod
-    def from_dict(cls, data):
-        data = _mapping(data, "loss")
-        _check_keys(data, set(), "loss", optional={"dice_scope", "dice_weight"})
-        config = cls(dice_scope=data.get("dice_scope", "all"), dice_weight=float(data.get("dice_weight", 1.0)))
-        if config.dice_scope not in {"all", "positive"}:
-            raise ValueError("loss.dice_scope must be 'all' or 'positive'")
-        if not 0 <= config.dice_weight < float("inf"):
-            raise ValueError("loss.dice_weight must be finite and non-negative")
-        return config
 
     def to_dict(self):
-        return {"dice_scope": self.dice_scope, "dice_weight": self.dice_weight}
+        return dict(data_path=str(self.data_path), runs_path=str(self.runs_path), run_name=self.run_name)
+
+
+@dataclass(frozen=True)
+class ModelConfig(ConfigSection):
+    encoder_name: str = 'pvt_v2_b2'
+    forensic_channels: tuple[int, ...] = (64, 96, 128)
+    aux_weight: float = 0.4
+    norm: str = 'batch'
+    use_forensics: bool = True
+    dct_aux_weight: float = 0.0
+    decoder_kwargs: dict[str, Any] = field(default_factory=dict)
+    local_image_size: int = 0
+
+    def __post_init__(self):
+        _non_empty_str(self.encoder_name, 'model.encoder_name')
+        object.__setattr__(self, 'forensic_channels', tuple(self.forensic_channels))
+        if len(self.forensic_channels) != 3 or any(type(c) is not int or c <= 0 for c in self.forensic_channels):
+            raise ValueError('model.forensic_channels must contain three positive integers')
+        if self.norm not in {'batch', 'group'}:
+            raise ValueError("model.norm must be 'batch' or 'group'")
+        if type(self.use_forensics) is not bool:
+            raise ValueError('model.use_forensics must be boolean')
+        for name in ('aux_weight', 'dct_aux_weight'):
+            _nonnegative(getattr(self, name), f'model.{name}')
+        if self.dct_aux_weight and not self.use_forensics:
+            raise ValueError('DCT auxiliary head requires use_forensics')
+        if type(self.local_image_size) is not int or self.local_image_size < 0 or self.local_image_size % 32:
+            raise ValueError('model.local_image_size must be 0 or a positive multiple of 32')
+        _mapping(self.decoder_kwargs, 'model.decoder_kwargs')
+        reserved = {'encoder_channels', 'encoder_strides', 'norm', 'use_aux'}
+        if reserved.intersection(self.decoder_kwargs):
+            raise ValueError('model.decoder_kwargs must not override encoder metadata, norm or use_aux')
+        if self.local_image_size and any(self.decoder_kwargs.get(k, 0) for k in
+                                        ('rgb_refinement_channels', 'output_refinement_channels')):
+            raise ValueError('local_image_size must not be combined with decoder refinement experiments')
+
+
+@dataclass(frozen=True)
+class DatasetConfig(ConfigSection):
+    image_size: int = 640
+    resize_mode: str = 'stretch'
+    # A storage location, never an enable/disable switch. The manifest is mandatory.
+    protocol_path: str = DEFAULT_PROTOCOL_PATH
+
+    def __post_init__(self):
+        if type(self.image_size) is not int or self.image_size < 8 or self.image_size % 8:
+            raise ValueError('dataset.image_size must be divisible by 8 and at least 8')
+        if self.resize_mode not in {'stretch', 'letterbox'}:
+            raise ValueError("dataset.resize_mode must be 'stretch' or 'letterbox'")
+        _non_empty_str(self.protocol_path, 'dataset.protocol_path')
+
+
+@dataclass(frozen=True)
+class TrainConfig(ConfigSection):
+    device: str = 'cuda'
+    workers: int = 10
+    encoder_lr: float = 1e-4
+    fmap_lr: float = 3e-4
+    lr: float = 3e-4
+    weight_decay: float = 1e-4
+    epochs: int = 6
+    epoch_size: int = 24000
+    negative_fraction: float = .25
+    batch_size: int = 4
+    accum_steps: int = 4
+    warmup_frac: float = .05
+    min_lr_factor: float = .02
+    amp: str = 'bf16'
+    ema_decay: float = .999
+    grad_clip: float = 1.0
+    resume: bool = False
+
+    def __post_init__(self):
+        self.validate()
+
+    def validate(self):
+        if not isinstance(self.device, str) or not (self.device in {'cpu', 'mps'} or self.device.startswith('cuda')):
+            raise ValueError("train.device must be 'cpu', 'mps', 'cuda' or 'cuda:<index>'")
+        for name in ('epochs', 'epoch_size', 'batch_size', 'accum_steps'):
+            if type(getattr(self, name)) is not int or getattr(self, name) <= 0:
+                raise ValueError(f'train.{name} must be a positive integer')
+        if type(self.workers) is not int or self.workers < 0:
+            raise ValueError('train.workers must be a nonnegative integer')
+        for name in ('encoder_lr', 'fmap_lr', 'lr'):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f'train.{name} must be finite and positive')
+        for name in ('weight_decay', 'grad_clip'):
+            _nonnegative(getattr(self, name), f'train.{name}')
+        for name in ('warmup_frac', 'min_lr_factor'):
+            _check_probability_grid((getattr(self, name),), f'train.{name}')
+        if not 0 < self.negative_fraction < 1:
+            raise ValueError('train.negative_fraction must be in (0, 1)')
+        if not 0 <= self.ema_decay < 1:
+            raise ValueError('train.ema_decay must be in [0, 1)')
+        if self.amp not in {'off', 'fp16', 'bf16'}:
+            raise ValueError("train.amp must be 'off', 'fp16' or 'bf16'")
+        if type(self.resume) is not bool:
+            raise ValueError('train.resume must be boolean')
+
+
+@dataclass(frozen=True)
+class EvalConfig(ConfigSection):
+    n_bins: int = 256
+    mask_thresholds: tuple[float, ...] = DEFAULT_MASK_GRID
+    cls_thresholds: tuple[float, ...] = (0., .2, .4, .5, .6, .7, .8, .9, .95)
+    min_areas: tuple[float, ...] = (0.,)
+
+    def __post_init__(self):
+        if type(self.n_bins) is not int or self.n_bins <= 0:
+            raise ValueError('eval.n_bins must be a positive integer')
+        for name in ('mask_thresholds', 'cls_thresholds', 'min_areas'):
+            values = tuple(float(value) for value in getattr(self, name))
+            object.__setattr__(self, name, values)
+            _check_probability_grid(values, f'eval.{name}')
+
+
+@dataclass(frozen=True)
+class LossConfig(ConfigSection):
+    dice_scope: str = 'all'
+    dice_weight: float = 1.0
+
+    def __post_init__(self):
+        if self.dice_scope not in {'all', 'positive'}:
+            raise ValueError("loss.dice_scope must be 'all' or 'positive'")
+        _nonnegative(self.dice_weight, 'loss.dice_weight')
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
     paths: PathsConfig
-    seed: int
-    model: ModelConfig
-    augmentation: AugmentationConfig
-    dataset: DatasetConfig
-    train: TrainConfig
-    eval: EvalConfig
+    seed: int = 42
+    model: ModelConfig = field(default_factory=ModelConfig)
+    augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    train: TrainConfig = field(default_factory=TrainConfig)
+    eval: EvalConfig = field(default_factory=EvalConfig)
     loss: LossConfig = field(default_factory=LossConfig)
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], *, base_dir: str | Path = ".") -> ExperimentConfig:
-        data = _mapping(data, "experiment")
-        _check_keys(data, {"paths", "seed", "model", "augmentation", "dataset", "train", "eval"}, "experiment", optional={"loss"})
-        base_dir = Path(base_dir)
-        config = cls(
-            paths=PathsConfig.from_dict(_required(data, "paths", "experiment"), base_dir=base_dir),
-            seed=int(_required(data, "seed", "experiment")),
-            model=ModelConfig.from_dict(_required(data, "model", "experiment")),
-            augmentation=_augmentation_from_dict(_required(data, "augmentation", "experiment")),
-            dataset=DatasetConfig.from_dict(_required(data, "dataset", "experiment")),
-            train=TrainConfig.from_dict(_required(data, "train", "experiment")),
-            eval=EvalConfig.from_dict(data.get("eval")),
-            loss=LossConfig.from_dict(data.get("loss", {})),
+    def from_dict(cls, data, *, base_dir='.'):
+        data = _mapping(data, 'experiment')
+        _check_keys(data, {'paths'}, 'experiment', optional={
+            'seed', 'model', 'augmentation', 'dataset', 'train', 'eval', 'loss', 'pipeline_version'})
+        if data.get('pipeline_version', PIPELINE_VERSION) != PIPELINE_VERSION:
+            raise ValueError('Unsupported pipeline_version')
+        return cls(
+            paths=PathsConfig.from_dict(data['paths'], base_dir=Path(base_dir)),
+            seed=data.get('seed', 42),
+            model=ModelConfig.from_dict(data.get('model', {})),
+            augmentation=_augmentation_from_dict(data.get('augmentation', {})),
+            dataset=DatasetConfig.from_dict(data.get('dataset', {})),
+            train=TrainConfig.from_dict(data.get('train', {})),
+            eval=EvalConfig.from_dict(data.get('eval', {})),
+            loss=LossConfig.from_dict(data.get('loss', {})),
         )
-        if config.seed < 0:
-            raise ValueError("seed must be non-negative")
-        if config.augmentation.final_full_frame_epochs > config.train.epochs:
-            raise ValueError("augmentation.final_full_frame_epochs must not exceed train.epochs")
-        return config
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "paths": self.paths.to_dict(),
-            "seed": self.seed,
-            "model": self.model.to_dict(),
-            "augmentation": _augmentation_to_dict(self.augmentation),
-            "dataset": self.dataset.to_dict(),
-            "train": self.train.to_dict(),
-            "eval": self.eval.to_dict(),
-            "loss": self.loss.to_dict(),
-        }
+    def __post_init__(self):
+        if type(self.seed) is not int or self.seed < 0:
+            raise ValueError('seed must be a nonnegative integer')
+        if self.augmentation.final_full_frame_epochs > self.train.epochs:
+            raise ValueError('augmentation.final_full_frame_epochs must not exceed train.epochs')
+        if self.model.local_image_size and self.dataset.resize_mode != 'stretch':
+            raise ValueError('local_image_size currently requires stretch geometry')
 
-    def to_flat_dict(self) -> dict[str, Any]:
-        plain = {
-            "data_path": str(self.paths.data_path),
-            "runs_path": str(self.paths.runs_path),
-            "run_name": self.paths.run_name,
-            "seed": self.seed,
-        }
-        for section in (self.model, self.augmentation, self.dataset, self.train, self.eval, self.loss):
-            if isinstance(section, AugmentationConfig):
-                plain.update(_augmentation_to_dict(section))
-            else:
-                plain.update(section.to_dict())
+    def to_dict(self):
+        result = {'pipeline_version': PIPELINE_VERSION, 'paths': self.paths.to_dict(), 'seed': self.seed}
+        for name in ('model', 'dataset', 'train', 'eval', 'loss'):
+            result[name] = getattr(self, name).to_dict()
+        result['augmentation'] = asdict(self.augmentation)
+        return result
+
+    def to_flat_dict(self):
+        plain = {'pipeline_version': PIPELINE_VERSION, **self.paths.to_dict(), 'seed': self.seed}
+        for name in ('model', 'dataset', 'train', 'eval', 'loss'):
+            plain.update(getattr(self, name).to_dict())
+        plain.update(asdict(self.augmentation))
         return plain
 
 
 class _ConfigLoader:
-    """Resolve single-parent YAML inheritance before validating an experiment."""
+    """Single-parent YAML inheritance; resolved snapshots have no parent dependency."""
 
-    def load(self, path: Path, chain: tuple[Path, ...] = ()) -> dict[str, Any]:
+    def load(self, path: Path, chain=()):
         path = path.resolve()
         if path in chain:
-            names = " -> ".join(str(item) for item in (*chain, path))
-            raise ValueError(f"Cyclic config inheritance: {names}")
-        with path.open("r", encoding="utf-8") as fh:
-            data = dict(_mapping(yaml.safe_load(fh), str(path)))
-        if "extends" not in data:
+            raise ValueError('Cyclic config inheritance: ' + ' -> '.join(map(str, (*chain, path))))
+        with path.open(encoding='utf-8') as stream:
+            data = dict(_mapping(yaml.safe_load(stream), str(path)))
+        if 'extends' not in data:
             return data
-        parent = data.pop("extends")
+        parent = data.pop('extends')
         if not isinstance(parent, str) or not parent.strip():
-            raise ValueError(f"extends in {path} must be a non-empty string")
-        inherited = self.load(path.parent / parent, (*chain, path))
-        return self._merge(inherited, data)
+            raise ValueError(f'extends in {path} must be a non-empty string')
+        return self._merge(self.load(path.parent / parent, (*chain, path)), data)
 
-    def _merge(self, base: Mapping[str, Any], overrides: Mapping[str, Any]) -> dict[str, Any]:
+    def _merge(self, base, overrides):
         merged = dict(base)
         for key, value in overrides.items():
-            if isinstance(merged.get(key), Mapping) and isinstance(value, Mapping):
-                merged[key] = self._merge(merged[key], value)
-            else:
-                merged[key] = value
+            merged[key] = self._merge(merged[key], value) if isinstance(merged.get(key), Mapping) and isinstance(value, Mapping) else value
         return merged
 
 
-def load_experiment_config(path: str | Path) -> ExperimentConfig:
-    """Load YAML, recursively merging an optional relative or absolute `extends`."""
+def load_experiment_config(path):
     path = Path(path)
     return ExperimentConfig.from_dict(_ConfigLoader().load(path), base_dir=path.parent)
 
 
-def _augmentation_from_dict(data: Mapping[str, Any]) -> AugmentationConfig:
-    data = _mapping(data, "augmentation")
-    _check_keys(
-        data,
-        {
-            "crop_scale_range",
-            "jpeg_recompression_probability",
-            "jpeg_recompression_quality_range",
-            "full_frame",
-        },
-        "augmentation",
-        optional={"full_frame_probability", "foreground_crop_probability", "final_full_frame_epochs"},
-    )
-    config = AugmentationConfig(
-        crop_scale_range=_float_tuple(
-            _required(data, "crop_scale_range", "augmentation"),
-            "augmentation.crop_scale_range",
-        ),
-        jpeg_recompression_probability=float(
-            _required(data, "jpeg_recompression_probability", "augmentation")
-        ),
-        jpeg_recompression_quality_range=_int_tuple(
-            _required(data, "jpeg_recompression_quality_range", "augmentation"),
-            "augmentation.jpeg_recompression_quality_range",
-        ),
-        full_frame=bool(_required(data, "full_frame", "augmentation")),
-        full_frame_probability=float(data.get("full_frame_probability", 0.0)),
-        foreground_crop_probability=float(data.get("foreground_crop_probability", 0.0)),
-        final_full_frame_epochs=int(data.get("final_full_frame_epochs", 0)),
-    )
-    if len(config.crop_scale_range) != 2:
-        raise ValueError("augmentation.crop_scale_range must contain exactly 2 values")
-    crop_min, crop_max = config.crop_scale_range
-    if not 0.0 < crop_min <= crop_max <= 1.0:
-        raise ValueError("augmentation.crop_scale_range must satisfy 0 < min <= max <= 1")
-    if not 0.0 <= config.jpeg_recompression_probability <= 1.0:
-        raise ValueError("augmentation.jpeg_recompression_probability must be in [0, 1]")
-    if len(config.jpeg_recompression_quality_range) != 2:
-        raise ValueError("augmentation.jpeg_recompression_quality_range must contain exactly 2 values")
-    quality_min, quality_max = config.jpeg_recompression_quality_range
-    if not 1 <= quality_min <= quality_max <= 100:
-        raise ValueError("augmentation.jpeg_recompression_quality_range must satisfy 1 <= min <= max <= 100")
+def _augmentation_from_dict(data):
+    data = dict(_mapping(data, 'augmentation'))
+    _check_keys(data, set(), 'augmentation', optional={f.name for f in fields(AugmentationConfig)})
+    data = _float_fields(AugmentationConfig, data)
+    for name in ('crop_scale_range', 'jpeg_recompression_quality_range'):
+        if name in data:
+            cast = float if name == 'crop_scale_range' else int
+            data[name] = tuple(cast(value) for value in data[name])
+    config = AugmentationConfig(**data)
+    if len(config.crop_scale_range) != 2 or not 0 < config.crop_scale_range[0] <= config.crop_scale_range[1] <= 1:
+        raise ValueError('augmentation.crop_scale_range must satisfy 0 < min <= max <= 1')
+    if len(config.jpeg_recompression_quality_range) != 2 or not 1 <= config.jpeg_recompression_quality_range[0] <= config.jpeg_recompression_quality_range[1] <= 100:
+        raise ValueError('augmentation.jpeg_recompression_quality_range must satisfy 1 <= min <= max <= 100')
+    _check_probability_grid((config.jpeg_recompression_probability,), 'augmentation.jpeg_recompression_probability')
     return config
 
 
-def _augmentation_to_dict(config: AugmentationConfig) -> dict[str, Any]:
-    return {
-        "crop_scale_range": config.crop_scale_range,
-        "jpeg_recompression_probability": config.jpeg_recompression_probability,
-        "jpeg_recompression_quality_range": config.jpeg_recompression_quality_range,
-        "full_frame": config.full_frame,
-        "full_frame_probability": config.full_frame_probability,
-        "foreground_crop_probability": config.foreground_crop_probability,
-        "final_full_frame_epochs": config.final_full_frame_epochs,
-    }
+def _float_fields(cls, data):
+    """PyYAML can read scientific notation such as 1e-4 as a string."""
+    result = dict(data)
+    for item in fields(cls):
+        if item.name in result and item.type in (float, 'float'):
+            result[item.name] = float(result[item.name])
+    return result
 
 
-def _mapping(data: Any, section: str) -> Mapping[str, Any]:
+def _mapping(data, section):
     if not isinstance(data, Mapping):
-        raise TypeError(f"{section} must be a mapping")
+        raise TypeError(f'{section} must be a mapping')
     return data
 
 
-def _check_keys(data: Mapping[str, Any], allowed: set[str], section: str,
-                *, optional: set[str] = frozenset()) -> None:
+def _check_keys(data, allowed, section, *, optional=frozenset()):
     unknown = sorted(set(data) - allowed - optional)
     if unknown:
         raise ValueError(f"unknown keys in {section}: {', '.join(unknown)}")
@@ -525,56 +300,26 @@ def _check_keys(data: Mapping[str, Any], allowed: set[str], section: str,
         raise ValueError(f"missing keys in {section}: {', '.join(missing)}")
 
 
-def _required(data: Mapping[str, Any], key: str, section: str) -> Any:
-    if key not in data:
-        raise ValueError(f"missing key in {section}: {key}")
-    return data[key]
+def _non_empty_str(value, name):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f'{name} must be a nonempty string')
+    return value.strip()
 
 
-def _non_empty_str(value: Any, name: str) -> str:
-    text = str(value).strip()
-    if not text:
-        raise ValueError(f"{name} must not be empty")
-    return text
+def _nonnegative(value, name):
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f'{name} must be finite and non-negative')
 
 
-def _path(value: Any, base_dir: Path) -> Path:
+def _path(value, base_dir):
     path = Path(os.path.expandvars(str(value))).expanduser()
-    if not path.is_absolute():
-        path = base_dir / path
-    return path.resolve()
+    return (path if path.is_absolute() else base_dir / path).resolve()
 
 
-def _int_tuple(value: Any, name: str) -> tuple[int, ...]:
-    return tuple(int(item) for item in _sequence(value, name))
+def _check_probability_grid(values, name):
+    if not values or any(not 0 <= v <= 1 for v in values):
+        raise ValueError(f'{name} must contain probabilities in [0, 1]')
 
 
-def _float_tuple(value: Any, name: str) -> tuple[float, ...]:
-    return tuple(float(item) for item in _sequence(value, name))
-
-
-def _sequence(value: Any, name: str) -> tuple[Any, ...]:
-    if isinstance(value, str) or not hasattr(value, "__iter__"):
-        raise TypeError(f"{name} must be a sequence")
-    result = tuple(value)
-    if not result:
-        raise ValueError(f"{name} must not be empty")
-    return result
-
-
-def _check_probability_grid(values: tuple[float, ...], name: str) -> None:
-    if any(value < 0.0 or value > 1.0 for value in values):
-        raise ValueError(f"{name} values must be in [0, 1]")
-
-
-__all__ = [
-    "AugmentationConfig",
-    "DatasetConfig",
-    "EvalConfig",
-    "ExperimentConfig",
-    "ModelConfig",
-    "LossConfig",
-    "PathsConfig",
-    "TrainConfig",
-    "load_experiment_config",
-]
+__all__ = ['AugmentationConfig', 'DatasetConfig', 'EvalConfig', 'ExperimentConfig', 'ModelConfig',
+           'LossConfig', 'PathsConfig', 'TrainConfig', 'load_experiment_config', 'PIPELINE_VERSION']

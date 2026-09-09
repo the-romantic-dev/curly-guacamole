@@ -12,9 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .base import Decoder
 from .layers import make_norm
-from .registry import register_decoder
 from .refinement import RGBLogitRefinement, SpatialResidualRefinement
 
 
@@ -114,9 +112,10 @@ class GroupedAttentionGate(nn.Module):
         return skip * self.mask(self.query(features) + self.skip(skip))
 
 
-@register_decoder('emcad')
-class EMCADDecoder(Decoder):
+class EMCADDecoder(nn.Module):
     """Four-scale EMCAD with encoder-width stages and output at stride 4."""
+
+    head_kernel_size = 1
 
     def __init__(self, encoder_channels, encoder_strides, norm='batch', use_aux=False,
                  kernel_sizes=(1, 3, 5), expansion_factor=2, lgag_kernel_size=3,

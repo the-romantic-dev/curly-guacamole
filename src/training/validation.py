@@ -23,7 +23,7 @@ class ValidationResult:
 
     accumulator: AICAccumulator
     tuned: AICResult
-    resolution: str = "resized"
+    resolution: str = "original"
     loss_components: dict[str, float] = field(default_factory=dict)
     fixed: AICResult | None = None
 
@@ -54,6 +54,8 @@ def validate(
 
         with amp.autocast():
             kwargs = {"valid_mask": batch["valid_mask"].to(device)} if "valid_mask" in batch else {}
+            if 'local_input' in batch:
+                kwargs['local_input'] = batch['local_input'].to(device, non_blocking=True)
             out = model(images, fmap, **kwargs)
 
         # Comparable main-head loss on the network grid; AIC can use original GT.
@@ -62,22 +64,13 @@ def validate(
         probs = torch.sigmoid(out["logits"].float())
         cls = torch.sigmoid(out["cls_logits"].float()).reshape(-1)
 
-        if config.eval.resolution == "original":
-            if "original_mask" not in batch:
-                raise ValueError("original validation requires original_mask from the dataset")
-            for index, mask in enumerate(batch["original_mask"]):
-                content = batch["content_size"][index] if "content_size" in batch else None
-                restored = Letterbox.restore(probs[index:index + 1], mask.shape[-2:], content)
-                _update_histograms(acc, restored, mask.to(device).reshape(1, 1, *mask.shape[-2:]),
-                                   cls[index:index + 1])
-        else:
-            masks = batch["mask"].to(device, non_blocking=True)
-            if "content_size" in batch:
-                for index, content in enumerate(batch["content_size"]):
-                    _update_histograms(acc, Letterbox.crop(probs[index:index + 1], content),
-                                       Letterbox.crop(masks[index:index + 1], content), cls[index:index + 1])
-            else:
-                _update_histograms(acc, probs, masks, cls)
+        if "original_mask" not in batch:
+            raise ValueError("original validation requires original_mask from the dataset")
+        for index, mask in enumerate(batch["original_mask"]):
+            content = batch["content_size"][index] if "content_size" in batch else None
+            restored = Letterbox.restore(probs[index:index + 1], mask.shape[-2:], content)
+            _update_histograms(acc, restored, mask.to(device).reshape(1, 1, *mask.shape[-2:]),
+                               cls[index:index + 1])
 
     if thresholds is None:
         ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
@@ -87,7 +80,7 @@ def validate(
             raise ValueError('Frozen mask threshold must match an exact histogram boundary')
         tuned = acc.evaluate(thresholds.mask_threshold, thresholds.cls_threshold, thresholds.min_area)
     ConsoleProgress.info(f"Оценка завершена: {tuned}")
-    return ValidationResult(accumulator=acc, tuned=tuned, resolution=config.eval.resolution,
+    return ValidationResult(accumulator=acc, tuned=tuned, resolution="original",
                             loss_components=meter.compute(), fixed=acc.evaluate(.5, .0, .0))
 
 

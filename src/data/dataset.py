@@ -14,6 +14,7 @@ from src.data.data_sample import DataSample
 from src.data.data_workspace import DataWorkspace
 from src.data.preprocess import SamplePreprocessor
 from src.data.sample_io import SampleIO
+from src.data.local_preprocess import LocalPreprocessor
 from src.forensic.dct import forensic_maps, luma_qtable
 
 
@@ -36,10 +37,10 @@ class AIIJCDataset(Dataset):
             augmentations: AugmentationPipeline | None = None,
             fmap_channels: Sequence[int] | None = None,
             mode: Literal["train", "val", "test"] | None = None,
-            original_targets: bool = False,
+            original_targets: bool | None = None,
             resize_mode: str = "stretch",
             use_forensics: bool = True,
-            jpeg_qtable_order: str = "legacy_zigzag",
+            local_image_size: int = 0,
     ):
         super().__init__()
         self.data_workspace = data_workspace
@@ -47,15 +48,13 @@ class AIIJCDataset(Dataset):
         self.train = self.mode == "train"
         self.has_targets = self.mode in {"train", "val"}
         self.use_forensics = use_forensics
-        if jpeg_qtable_order not in {"natural", "legacy_zigzag"}:
-            raise ValueError("jpeg_qtable_order must be 'natural' or 'legacy_zigzag'")
-        if augmentations is not None and augmentations.jpeg_qtable_order != jpeg_qtable_order:
-            raise ValueError("dataset and augmentations must use the same jpeg_qtable_order")
-        self.jpeg_qtable_order = jpeg_qtable_order
+        if local_image_size and resize_mode != 'stretch':
+            raise ValueError('local_image_size currently requires stretch geometry')
+        self.local_preprocessor = LocalPreprocessor(local_image_size) if local_image_size else None
         self.image_size = image_size
         self.seed = seed
-        self.original_targets = original_targets
-        if original_targets and self.mode != "val":
+        self.original_targets = self.mode == "val" if original_targets is None else original_targets
+        if self.original_targets and self.mode != "val":
             raise ValueError("original_targets is only supported for validation")
         # Shared tensor propagates epochs to persistent DataLoader workers on Windows too.
         self._epoch = torch.zeros((), dtype=torch.int64).share_memory_()
@@ -86,7 +85,7 @@ class AIIJCDataset(Dataset):
         sample = DataSample(
             image=image,
             mask=self.load_mask(row, original_size) if self.has_targets else None,
-            qtable=luma_qtable(image_path, order=self.jpeg_qtable_order) if self.use_forensics else None,
+            qtable=luma_qtable(image_path) if self.use_forensics else None,
         )
         rng = self._make_rng(index)
         original_mask = sample.mask if self.original_targets else None
@@ -103,9 +102,18 @@ class AIIJCDataset(Dataset):
             fmap = np.zeros((1, h // 8, w // 8), dtype=np.float32)
         sample = replace(sample, fmap=fmap)
         sample = self._augment(AugmentationStage.AFTER_FORENSICS, sample, rng)
-        sample = self.preprocessor.resize(sample)
-        sample = self._augment(AugmentationStage.FINAL, sample, rng)
+        local_input = None
+        if self.local_preprocessor is not None:
+            # One appearance draw on native geometry shared by both views.
+            sample = self._augment(AugmentationStage.FINAL, sample, rng)
+            local_input = self.local_preprocessor(sample.image)
+            sample = self.preprocessor.resize(sample)
+        else:
+            sample = self.preprocessor.resize(sample)
+            sample = self._augment(AugmentationStage.FINAL, sample, rng)
         output = self.preprocessor.to_output(sample)
+        if local_input is not None:
+            output['local_input'] = local_input
         if not self.use_forensics:
             output.pop("fmap")
         if original_mask is not None:

@@ -19,8 +19,7 @@ class AugmentationPipeline:
     def __init__(
             self,
             config: AugmentationConfig | Mapping[str, Any],
-            *, total_epochs: int | None = None,
-            jpeg_qtable_order: str = "legacy_zigzag",
+            *, total_epochs: int = 6,
     ):
         self.config = (
             config
@@ -28,24 +27,20 @@ class AugmentationPipeline:
             else AugmentationConfig(**dict(config))
         )
         self.total_epochs = total_epochs
-        self.jpeg_qtable_order = jpeg_qtable_order
         self.epoch = 0
-        if self.config.final_full_frame_epochs and total_epochs is None:
-            raise ValueError("total_epochs is required for the final full-frame phase")
         self.full_frame_flip = RandomRotateFlip(full_frame=True)
         self.pipeline: dict[AugmentationStage, list[AIIJCAugmentation]] = {
             AugmentationStage.BEFORE_FORENSICS: [
                 RandomJPEGRecompression(
                     quality_range=self.config.jpeg_recompression_quality_range,
                     probability=self.config.jpeg_recompression_probability,
-                    jpeg_qtable_order=jpeg_qtable_order,
                 )
             ],
             AugmentationStage.AFTER_FORENSICS: [
                 RandomDCTAlignedCrop(crop_scale_range=self.config.crop_scale_range,
-                                     full_frame=self.config.full_frame,
+                                     full_frame=False,
                                      foreground_probability=self.config.foreground_crop_probability),
-                RandomRotateFlip(full_frame=self.config.full_frame)
+                RandomRotateFlip(full_frame=False)
             ],
             AugmentationStage.FINAL: [
                 RandomPhotometricAugmentation()
@@ -78,6 +73,6 @@ class AugmentationPipeline:
         final_phase = (self.total_epochs is not None
                        and self.config.final_full_frame_epochs > 0
                        and self.epoch >= self.total_epochs - self.config.final_full_frame_epochs)
-        if self.config.full_frame or final_phase:
+        if final_phase:
             return 1.0
         return self.config.full_frame_probability

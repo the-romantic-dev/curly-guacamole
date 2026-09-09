@@ -141,7 +141,6 @@ def test_segmenter_dummy_forward(monkeypatch):
 
     model = Segmenter(
         encoder_name="fake_encoder",
-        decoder_channels=(32, 16, 8, 4, 4),
         forensic_channels=(8, 16, 32),
         aux_weight=0.4,
     )

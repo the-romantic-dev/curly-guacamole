@@ -46,7 +46,7 @@ def test_build_model_uses_model_config(monkeypatch, pretrained):
     model = build_model(config.model, pretrained=pretrained)
 
     assert model.aux_weight == config.model.aux_weight
-    assert model.decoder.out_channels == config.model.decoder_channels[-1]
+    assert model.decoder.out_channels == FakeFeatureInfo.channels()[0]
 
 
 def test_build_loaders_uses_train_config():
