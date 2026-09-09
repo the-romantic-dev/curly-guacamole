@@ -11,6 +11,19 @@ from src.data.data_workspace import DataWorkspace
 from src.training.builders import build_datasets
 
 
+@pytest.mark.parametrize('dtype', [torch.float32, torch.bfloat16, torch.float16])
+@pytest.mark.parametrize('shape', [(64, 96), (123, 171), (23, 91)])
+def test_direct_local_output_matches_full_buffer_cast(dtype, shape):
+    from src.data.local_preprocess import LocalPreprocessor
+    from src.data.benchmark_local import PreviousPreprocessor
+    image = np.random.default_rng(31).integers(0, 256, (*shape, 3), dtype=np.uint8)
+    prep = LocalPreprocessor(64)
+    expected = PreviousPreprocessor(64)(image, dtype=dtype)
+    actual = prep(image, dtype=dtype)
+    assert actual.dtype == dtype and actual.is_contiguous()
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
 @pytest.mark.parametrize('device,amp,dtype', [('cuda', 'bf16', torch.bfloat16),
                                            ('cuda', 'fp16', torch.float16),
                                            ('cuda', 'off', torch.float32),

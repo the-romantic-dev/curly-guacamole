@@ -132,12 +132,10 @@ class AIIJCDataset(Dataset):
                 timer.mark('photometric')
             # Match the first local convolution's AMP cast before IPC/H2D.
             # Native residual extraction and resize always remain float32.
-            local_input = self.local_preprocessor(sample.image)
+            local_input = self.local_preprocessor(sample.image, dtype=self.local_dtype)
             if timer:
                 timer.mark('local_features')
-            local_input = local_input.to(self.local_dtype)
-            if timer:
-                timer.mark('local_cast')
+            # Conversion is now included in local_features; local_cast stays zero.
             sample = self.preprocessor.resize(sample)
             if timer:
                 timer.mark('resize')
