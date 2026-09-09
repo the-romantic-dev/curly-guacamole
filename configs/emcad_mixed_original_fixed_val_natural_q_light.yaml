@@ -1,0 +1,5 @@
+extends: emcad_mixed_original_fixed_val_light.yaml
+paths:
+  run_name: emcad_mixed_original_fixed_val_natural_q_light
+dataset:
+  jpeg_qtable_order: natural

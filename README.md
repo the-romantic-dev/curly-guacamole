@@ -3,6 +3,10 @@
 Reusable code lives in `src/`, experiment settings in `configs/`, and results in
 `runs/<run_name>/`. Use the `challenges` conda environment.
 
+Start with the [experiment map](docs/experiment_map.md) for the current config-to-run
+catalog, saved results, comparison groups, and differences between recipes and run
+snapshots (local audit dated 2026-09-09).
+
 ## Training
 
 Open `notebooks/baseline_pipeline.ipynb` with the `challenges` kernel. For a new

@@ -1,0 +1,7 @@
+extends: baseline_protocol_originals.yaml
+paths:
+  run_name: pvt_v2_b2_protocol_originals_light
+augmentation:
+  final_full_frame_epochs: 2
+train:
+  epochs: 6
