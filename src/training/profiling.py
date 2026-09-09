@@ -137,7 +137,8 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized', profile_da
         profiler = StageProfiler(runner.device, warmup)
         ConsoleProgress.info(f'Profile {transport}/{mode}: warmup={warmup}, measured={batches}')
         train_one_epoch(model=model, loader=source, optimizer=optimizer,
-                        scheduler=build_scheduler(config.train, optimizer, total),
+                        scheduler=build_scheduler(config.train, optimizer, total,
+                                                  full_steps_per_epoch=total),
                         scaler=runner.amp.scaler(), ema=ema, amp=runner.amp,
                         config=config, device=runner.device, profiler=profiler,
                         asynchronous_transfer=transport == 'optimized' and mode == 'loader')

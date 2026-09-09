@@ -16,6 +16,7 @@
 |---|---|
 | [baseline](configs/baseline.yaml) | Базовая модель, BCE + Dice на всех примерах |
 | [positive_dice](configs/positive_dice.yaml) | Dice только на позитивных; BCE по всем |
+| [positive_dice_full_train](configs/positive_dice_full_train.yaml) | 4 sampled-эпохи + 1 полный full-frame проход; warmup, постоянный LR, затем cosine до 10% |
 | [local](configs/local.yaml) | Positive Dice + локальная RGB/residual-ветка 1024 |
 | [stride4](configs/stride4.yaml) | Spatial refinement 144 каналов после EMCAD |
 | [stride2_rgb](configs/stride2_rgb.yaml) | RGB refinement stride 2, batch 2 × accumulation 8 |
@@ -33,6 +34,15 @@ paths:
 Все значения по умолчанию определены в [src/config.py](src/config.py) и [AugmentationConfig](src/data/augmentation/base.py). Snapshots сохраняют полностью разрешённые настройки и `pipeline_version: emcad_v1`.
 
 ## Запуск
+
+`positive_dice_full_train` наследует positive_dice, но использует 5 эпох: четыре по 24 000
+показов с возвращением и одну по всему train без повторов (87 728 записей в текущем
+протоколе, включая originals). Всего 183 728 показов; финальный баланс классов естественный.
+Последний неполный батч сохраняется. Аугментации прежние, в финале отключены кропы.
+`train.full_train_epochs: 1` включает этот режим и двухфазный LR: warmup на 5% шагов
+основной фазы (0.2 эпохи), постоянный базовый LR до её конца, затем cosine за полный
+проход до `min_lr_factor: 0.1`. Число шагов учитывает длину каждой фазы и accumulation.
+Запуск с нуля; для resume того же прогона нельзя менять параметры расписания или batch.
 
 Откройте [notebooks/train.ipynb](notebooks/train.ipynb), выберите `experiment` и выполните ячейки. До обучения ноутбук проверяет manifest и полный FLOPs-бюджет без загрузки pretrained-весов. Последняя ячейка запускает обучение.
 

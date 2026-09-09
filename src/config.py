@@ -120,6 +120,7 @@ class TrainConfig(ConfigSection):
     weight_decay: float = 1e-4
     epochs: int = 6
     epoch_size: int = 24000
+    full_train_epochs: int = 0
     negative_fraction: float = .25
     batch_size: int = 4
     accum_steps: int = 4
@@ -141,6 +142,8 @@ class TrainConfig(ConfigSection):
                 raise ValueError(f'train.{name} must be a positive integer')
         if type(self.workers) is not int or self.workers < 0:
             raise ValueError('train.workers must be a nonnegative integer')
+        if type(self.full_train_epochs) is not int or not 0 <= self.full_train_epochs < self.epochs:
+            raise ValueError('train.full_train_epochs must be an integer in [0, epochs)')
         for name in ('encoder_lr', 'fmap_lr', 'lr'):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
@@ -220,6 +223,8 @@ class ExperimentConfig:
             raise ValueError('seed must be a nonnegative integer')
         if self.augmentation.final_full_frame_epochs > self.train.epochs:
             raise ValueError('augmentation.final_full_frame_epochs must not exceed train.epochs')
+        if self.train.full_train_epochs > self.augmentation.final_full_frame_epochs:
+            raise ValueError('train.full_train_epochs requires matching final_full_frame_epochs')
         if self.model.local_image_size and self.dataset.resize_mode != 'stretch':
             raise ValueError('local_image_size currently requires stretch geometry')
 

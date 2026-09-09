@@ -80,7 +80,11 @@ class ExperimentRunner:
 
         ConsoleProgress.info(f"DataLoader готовы: train={len(train_loader)} батчей, val={len(val_loader)}; настройка scheduler, AMP scaler и EMA")
         steps_per_epoch = math.ceil(len(train_loader) / cfg.train.accum_steps)
-        scheduler = build_scheduler(cfg.train, optimizer, steps_per_epoch)
+        scheduler_kwargs = {}
+        if cfg.train.full_train_epochs:
+            scheduler_kwargs['full_steps_per_epoch'] = math.ceil(
+                math.ceil(len(train_ds) / cfg.train.batch_size) / cfg.train.accum_steps)
+        scheduler = build_scheduler(cfg.train, optimizer, steps_per_epoch, **scheduler_kwargs)
         scaler = self.amp.scaler()
         ema = build_ema(cfg.train, model)
 
@@ -110,11 +114,15 @@ class ExperimentRunner:
             for epoch in range(state.start_epoch, cfg.train.epochs):
                 train_ds.set_epoch(epoch)
                 train_ds.augmentations.set_epoch(epoch)
+                if cfg.train.full_train_epochs:
+                    train_loader.sampler.set_epoch(epoch)
+                    steps_per_epoch = math.ceil(len(train_loader) / cfg.train.accum_steps)
                 train_loader.sampler.generator = torch.Generator().manual_seed(cfg.seed + epoch)
                 started = time.time()
                 run.info(f"Полные кадры: p={train_ds.augmentations.full_frame_probability:.2f}; "
                          "валидация: original")
-                run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение")
+                run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение; "
+                         f"показов={len(train_loader.sampler)}, optimizer steps={steps_per_epoch}")
                 train_result = train_one_epoch(
                     model=model,
                     loader=train_loader,
@@ -205,6 +213,12 @@ class ExperimentRunner:
             raise ValueError('Cannot resume a historical pipeline; choose a new run_name')
         current = cfg.to_flat_dict()
         saved_dataset = snapshot.get('dataset', snapshot)
+        saved_train = snapshot.get('train', snapshot)
+        if cfg.train.full_train_epochs or saved_train.get('full_train_epochs', 0):
+            for key in ('full_train_epochs', 'epochs', 'epoch_size', 'batch_size', 'accum_steps',
+                        'warmup_frac', 'min_lr_factor', 'encoder_lr', 'fmap_lr', 'lr'):
+                if saved_train.get(key) != current[key]:
+                    raise ValueError(f'Cannot resume with a different train.{key}; choose a new run_name')
         for key in ('image_size', 'resize_mode', 'protocol_path'):
             if saved_dataset.get(key) != current[key]:
                 raise ValueError(f'Cannot resume with a different dataset.{key}; choose a new run_name')
@@ -358,6 +372,7 @@ def train_one_epoch(
     criterion = SegmentationLoss(**config.loss.to_dict(), aux_weight=config.model.aux_weight,
                                  dct_aux_weight=config.model.dct_aux_weight)
     seen = 0
+    accumulation_samples = 0
     negatives = torch.zeros((), device=device)
     total_batches = len(loader) if isinstance(loader, Sized) else None
     optimizer.zero_grad(set_to_none=True)
@@ -385,14 +400,24 @@ def train_one_epoch(
         if profiler is not None:
             profiler.mark()
         loss = loss_result.total
-        scaler.scale(loss / config.train.accum_steps).backward()
+        if config.train.full_train_epochs:
+            accumulation_samples += len(images)
+            scaler.scale(loss * len(images)).backward()
+        else:
+            scaler.scale(loss / config.train.accum_steps).backward()
         if profiler is not None:
             profiler.mark()
         is_accum_boundary = (step + 1) % config.train.accum_steps == 0
         is_last_batch = total_batches is not None and (step + 1) == total_batches
         if is_accum_boundary or is_last_batch:
-            if config.train.grad_clip:
+            if config.train.grad_clip or config.train.full_train_epochs:
                 scaler.unscale_(optimizer)
+            if config.train.full_train_epochs:
+                for parameter in model.parameters():
+                    if parameter.grad is not None:
+                        parameter.grad.div_(accumulation_samples)
+                accumulation_samples = 0
+            if config.train.grad_clip:
                 nn.utils.clip_grad_norm_(model.parameters(), config.train.grad_clip)
             before = scaler.get_scale()
             scaler.step(optimizer)

@@ -16,6 +16,7 @@ from src.data.augmentation.pipeline import AugmentationPipeline
 from src.data.collation import ValidationCollator
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
+from src.training.sampling import FinalFullTrainSampler
 
 if TYPE_CHECKING:
     from src.modules.segmenter import Segmenter
@@ -147,11 +148,14 @@ def build_loaders(
     local = getattr(train_ds, 'local_preprocessor', None) is not None
     # Local views are 60 MiB each; avoid buffering two huge batches per worker.
     prefetch = 1 if local else 2
+    sampler = build_sampler(config, train_ds)
+    if config.full_train_epochs:
+        sampler = FinalFullTrainSampler(sampler, len(train_ds), config.epochs - config.full_train_epochs)
     train_loader = DataLoader(
         train_ds,
         batch_size=config.batch_size,
-        sampler=build_sampler(config, train_ds),
-        drop_last=True,
+        sampler=sampler,
+        drop_last=not bool(config.full_train_epochs),
         num_workers=config.workers,
         pin_memory=pin_memory,
         persistent_workers=config.workers > 0,
@@ -204,8 +208,24 @@ def build_scheduler(
     config: TrainConfig,
     optimizer: torch.optim.Optimizer,
     steps_per_epoch: int,
+    *,
+    full_steps_per_epoch: int | None = None,
 ) -> torch.optim.lr_scheduler.LambdaLR:
     steps_per_epoch = max(1, int(steps_per_epoch))
+    if config.full_train_epochs:
+        if full_steps_per_epoch is None or full_steps_per_epoch <= 0:
+            raise ValueError('full_steps_per_epoch is required for full train finetuning')
+        main_steps = steps_per_epoch * (config.epochs - config.full_train_epochs)
+        final_steps = full_steps_per_epoch * config.full_train_epochs
+        warmup = int(config.warmup_frac * main_steps)
+
+        def phase_lr(step):
+            if step < warmup:
+                return (step + 1) / max(1, warmup)
+            progress = min(1.0, max(0.0, (step - main_steps) / final_steps))
+            return config.min_lr_factor + (1 - config.min_lr_factor) * .5 * (1 + math.cos(math.pi * progress))
+
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, phase_lr)
     total_steps = max(1, steps_per_epoch * config.epochs)
     warmup = int(config.warmup_frac * total_steps)
 

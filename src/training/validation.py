@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-import numpy as np
 import torch
 
 from src.data.letterbox import Letterbox
@@ -45,6 +44,7 @@ def validate(
     model.eval()
     n_bins = config.eval.n_bins
     acc = AICAccumulator(n_bins=n_bins)
+    histograms = DeviceHistogramAccumulator(acc, device)
     meter = LossMeter()
     criterion = SegmentationLoss(**config.loss.to_dict())
 
@@ -69,9 +69,10 @@ def validate(
         for index, mask in enumerate(batch["original_mask"]):
             content = batch["content_size"][index] if "content_size" in batch else None
             restored = Letterbox.restore(probs[index:index + 1], mask.shape[-2:], content)
-            _update_histograms(acc, restored, mask.to(device).reshape(1, 1, *mask.shape[-2:]),
-                               cls[index:index + 1])
+            histograms.update(restored, mask.to(device, non_blocking=True).reshape(1, 1, *mask.shape[-2:]),
+                              cls[index:index + 1])
 
+    histograms.flush()
     if thresholds is None:
         ConsoleProgress.info("Подбор порогов маски, классификации и минимальной площади по AIC")
         tuned = acc.best(config.eval.mask_thresholds, config.eval.cls_thresholds, config.eval.min_areas)
@@ -84,22 +85,62 @@ def validate(
                             loss_components=meter.compute(), fixed=acc.evaluate(.5, .0, .0))
 
 
-def _update_histograms(acc: AICAccumulator, probs, masks, cls) -> None:
-    batch_size = probs.shape[0]
-    n_bins = acc.n_bins
-    flat = probs.clamp(0, 1).reshape(batch_size, -1)
-    idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
-    offset = torch.arange(batch_size, device=idx.device).unsqueeze(1) * n_bins
-    gt = masks.reshape(batch_size, -1) > 0.5
-    hist_all = torch.bincount((idx + offset).reshape(-1), minlength=batch_size * n_bins)
-    hist_gt = torch.bincount((idx + offset)[gt], minlength=batch_size * n_bins)
-    acc.update_hist(
-        hist_all.reshape(batch_size, n_bins).cpu().numpy(),
-        hist_gt.reshape(batch_size, n_bins).cpu().numpy(),
-        gt.sum(1).cpu().numpy(),
-        np.full(batch_size, flat.shape[1], dtype=np.int64),
-        cls.cpu().numpy(),
-    )
+class DeviceHistogramAccumulator:
+    """Buffer compact per-image statistics on device; copy only at chunk boundaries.
+
+    At 256 bins, 1024 rows use about 4 MiB regardless of original image sizes.
+    Integer counts and float32 classification probabilities keep their original
+    precision. The CPU accumulator still owns threshold selection and OOF output.
+    """
+
+    def __init__(self, accumulator: AICAccumulator, device, capacity: int = 1024):
+        if capacity < 1:
+            raise ValueError('Histogram capacity must be positive')
+        self.accumulator = accumulator
+        self.n_bins = accumulator.n_bins
+        self.capacity = capacity
+        self.count = 0
+        self.counts = torch.empty((capacity, 2 * self.n_bins + 2), dtype=torch.int64, device=device)
+        self.confidence = torch.empty(capacity, dtype=torch.float32, device=device)
+
+    @torch.no_grad()
+    def update(self, probs, masks, cls) -> None:
+        batch_size = probs.shape[0]
+        n_bins = self.n_bins
+        flat = probs.clamp(0, 1).reshape(batch_size, -1)
+        idx = (flat * n_bins).long().clamp_(max=n_bins - 1)
+        gt = masks.reshape(batch_size, -1) > 0.5
+        # Fixed-size integer reductions avoid dynamic boolean selection and
+        # bincount output sizing, which can synchronize CUDA with the host.
+        hist_all = torch.zeros((batch_size, n_bins), dtype=torch.int64, device=idx.device)
+        hist_gt = torch.zeros_like(hist_all)
+        hist_all.scatter_add_(1, idx, torch.ones_like(idx))
+        hist_gt.scatter_add_(1, idx, gt.to(torch.int64))
+        gt_sum = gt.sum(1)
+        cls = cls.reshape(-1)
+        start = 0
+        while start < batch_size:
+            take = min(batch_size - start, self.capacity - self.count)
+            rows = self.counts[self.count:self.count + take]
+            rows[:, :n_bins].copy_(hist_all[start:start + take])
+            rows[:, n_bins:2 * n_bins].copy_(hist_gt[start:start + take])
+            rows[:, -2].copy_(gt_sum[start:start + take])
+            rows[:, -1].fill_(flat.shape[1])
+            self.confidence[self.count:self.count + take].copy_(cls[start:start + take])
+            self.count += take
+            start += take
+            if self.count == self.capacity:
+                self.flush()
+
+    def flush(self) -> None:
+        if not self.count:
+            return
+        counts = self.counts[:self.count].cpu().numpy()
+        confidence = self.confidence[:self.count].cpu().numpy()
+        n_bins = self.n_bins
+        self.accumulator.update_hist(counts[:, :n_bins], counts[:, n_bins:2 * n_bins],
+                                     counts[:, -2], counts[:, -1], confidence)
+        self.count = 0
 
 
 

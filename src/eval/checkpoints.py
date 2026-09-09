@@ -20,7 +20,7 @@ from src.progress import ConsoleProgress
 from src.training.builders import AmpContext, DataLoaderThreadLimits, build_model
 from src.training.metric import AICAccumulator
 from src.training.runs import Run
-from src.training.validation import _update_histograms
+from src.training.validation import DeviceHistogramAccumulator
 
 
 def historical_originals(metadata, validation, originals, pairs):
@@ -87,6 +87,7 @@ class CheckpointEvaluator:
                             pin_memory=self.device.type == 'cuda')
         snapshot = self.run.snapshot
         acc = AICAccumulator(n_bins=int(snapshot.get('eval', snapshot).get('n_bins', 256)))
+        histograms = DeviceHistogramAccumulator(acc, self.device)
         try:
             with torch.inference_mode():
                 for batch in ConsoleProgress.iterate(loader, f'{self.run.dir.name}: {purpose}'):
@@ -100,7 +101,8 @@ class CheckpointEvaluator:
                     for i, mask in enumerate(batch['original_mask']):
                         content = batch['content_size'][i] if 'content_size' in batch else None
                         restored = Letterbox.restore(probs[i:i+1], mask.shape[-2:], content)
-                        _update_histograms(acc, restored, mask.to(self.device).reshape(1, 1, *mask.shape[-2:]), cls[i:i+1])
+                        histograms.update(restored, mask.to(self.device, non_blocking=True).reshape(1, 1, *mask.shape[-2:]), cls[i:i+1])
+                histograms.flush()
             if file_digest(self.checkpoint_path) != self.checkpoint_digest:
                 raise ValueError('Checkpoint changed during evaluation')
             acc.save(directory / 'predictions.npz')
