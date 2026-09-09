@@ -15,6 +15,7 @@ from src.data.data_workspace import DataWorkspace
 from src.data.preprocess import SamplePreprocessor
 from src.data.sample_io import SampleIO
 from src.data.local_preprocess import LocalPreprocessor
+from src.data.profiling import SampleTimer
 from src.forensic.dct import forensic_maps, luma_qtable
 
 
@@ -53,6 +54,7 @@ class AIIJCDataset(Dataset):
             raise ValueError('local_image_size currently requires stretch geometry')
         self.local_preprocessor = LocalPreprocessor(local_image_size) if local_image_size else None
         self.local_dtype = local_dtype
+        self.profile_data = False
         self.image_size = image_size
         self.seed = seed
         self.original_targets = self.mode == "val" if original_targets is None else original_targets
@@ -80,22 +82,36 @@ class AIIJCDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
+        timer = SampleTimer() if self.profile_data else None
         row = self.df.iloc[index]
         image_path = self._image_path(row)
         image = self.load_image(image_path)
         original_size = image.shape[:2]
+        if timer:
+            timer.mark('read_image')
+        mask = self.load_mask(row, original_size) if self.has_targets else None
+        if timer:
+            timer.mark('read_mask')
+        qtable = luma_qtable(image_path) if self.use_forensics else None
+        if timer:
+            timer.mark('qtable')
         sample = DataSample(
             image=image,
-            mask=self.load_mask(row, original_size) if self.has_targets else None,
-            qtable=luma_qtable(image_path) if self.use_forensics else None,
+            mask=mask,
+            qtable=qtable,
         )
+        del mask, qtable
         rng = self._make_rng(index)
         original_mask = sample.mask if self.original_targets else None
         if self.use_augmentations:
             self.augmentations.set_epoch(int(self._epoch.item()))
 
         # Recompression must precede DCT extraction; maps use the full frame before crop.
+        if timer:
+            timer.mark('setup')
         sample = self._augment(AugmentationStage.BEFORE_FORENSICS, sample, rng)
+        if timer:
+            timer.mark('jpeg')
         if self.use_forensics:
             fmap = forensic_maps(sample.image, sample.qtable)
         else:
@@ -103,18 +119,35 @@ class AIIJCDataset(Dataset):
             h, w = sample.image.shape[:2]
             fmap = np.zeros((1, h // 8, w // 8), dtype=np.float32)
         sample = replace(sample, fmap=fmap)
+        if timer:
+            timer.mark('dct')
         sample = self._augment(AugmentationStage.AFTER_FORENSICS, sample, rng)
+        if timer:
+            timer.mark('geometry')
         local_input = None
         if self.local_preprocessor is not None:
             # One appearance draw on native geometry shared by both views.
             sample = self._augment(AugmentationStage.FINAL, sample, rng)
+            if timer:
+                timer.mark('photometric')
             # Match the first local convolution's AMP cast before IPC/H2D.
             # Native residual extraction and resize always remain float32.
-            local_input = self.local_preprocessor(sample.image).to(self.local_dtype)
+            local_input = self.local_preprocessor(sample.image)
+            if timer:
+                timer.mark('local_features')
+            local_input = local_input.to(self.local_dtype)
+            if timer:
+                timer.mark('local_cast')
             sample = self.preprocessor.resize(sample)
+            if timer:
+                timer.mark('resize')
         else:
             sample = self.preprocessor.resize(sample)
+            if timer:
+                timer.mark('resize')
             sample = self._augment(AugmentationStage.FINAL, sample, rng)
+            if timer:
+                timer.mark('photometric')
         output = self.preprocessor.to_output(sample)
         if local_input is not None:
             output['local_input'] = local_input
@@ -128,6 +161,9 @@ class AIIJCDataset(Dataset):
         if self.mode == "test":
             output["original_size"] = torch.tensor(original_size, dtype=torch.int64)
             output["image_path"] = str(row["img_path"])
+        if timer:
+            timer.mark('tensorize')
+            output['_worker_profile'] = timer.tensor()
         return output
 
     def _augment(

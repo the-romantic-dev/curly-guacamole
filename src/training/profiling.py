@@ -68,8 +68,9 @@ class StageProfiler:
 
 
 class BenchmarkBatches:
-    def __init__(self, source, count, *, repeat=False):
+    def __init__(self, source, count, *, repeat=False, worker_profile=None, warmup=0):
         self.source, self.count, self.repeat = source, count, repeat
+        self.worker_profile, self.warmup = worker_profile, warmup
 
     def __len__(self):
         return self.count
@@ -80,11 +81,15 @@ class BenchmarkBatches:
                 yield self.source
         else:
             iterator = iter(self.source)
-            for _ in range(self.count):
-                yield next(iterator)
+            for index in range(self.count):
+                batch = next(iterator)
+                if self.worker_profile is not None:
+                    self.worker_profile.consume(batch, include=index >= self.warmup)
+                yield batch
 
 
-def benchmark(config, *, batches=32, warmup=8, transport='optimized'):
+def benchmark(config, *, batches=32, warmup=8, transport='optimized', profile_data=False):
+    from src.data.profiling import WorkerProfileSummary
     from src.training.base import set_random_seed
     from src.training.builders import (build_datasets, build_loaders, build_model,
                                        build_optimizer, build_scheduler, build_ema)
@@ -100,6 +105,8 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized'):
     set_random_seed(config.seed)
     train_rows, val_rows = runner._split_data()
     datasets = build_datasets(config, runner.data_workspace, train_rows, val_rows)
+    datasets[0].profile_data = profile_data
+    worker_profile = WorkerProfileSummary() if profile_data else None
     if transport == 'legacy':
         for dataset in datasets:
             dataset.local_dtype = torch.float32
@@ -109,6 +116,8 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized'):
         raise ValueError('Benchmark exceeds available training batches')
     # Keep one CPU batch for the isolated replay after workers have been released.
     frozen = next(iter(loader))
+    if worker_profile is not None:
+        worker_profile.consume(frozen, include=False)
     results = {}
     for mode in ('loader', 'gpu_replay'):
         if mode == 'gpu_replay':
@@ -119,7 +128,7 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized'):
             frozen['image'] = frozen['image'].contiguous(memory_format=torch.channels_last)
             source = BenchmarkBatches(frozen, total, repeat=True)
         else:
-            source = BenchmarkBatches(loader, total)
+            source = BenchmarkBatches(loader, total, worker_profile=worker_profile, warmup=warmup)
         set_random_seed(config.seed)
         # Fresh disposable model/optimizer per phase, no pretrained downloads or checkpoints.
         model = build_model(config.model, pretrained=False).to(runner.device, memory_format=torch.channels_last)
@@ -133,6 +142,8 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized'):
                         config=config, device=runner.device, profiler=profiler,
                         asynchronous_transfer=transport == 'optimized' and mode == 'loader')
         results[mode] = profiler.report()
+        if mode == 'loader' and worker_profile is not None:
+            results[mode]['worker_profile'] = worker_profile.report()
         ConsoleProgress.info(json.dumps(results[mode], ensure_ascii=False))
         del source, model, optimizer, ema
     return {'gpu': torch.cuda.get_device_name(runner.device), 'config': config.to_dict(),
@@ -175,9 +186,12 @@ def main():
     parser.add_argument('--workers', type=int, nargs='+', help='Compare worker counts, overriding .env for this benchmark only')
     parser.add_argument('--repeats', type=int, default=2, help='Passes for the worker comparison')
     parser.add_argument('--compare-transfer', action='store_true', help='Compare FP32, compact AMP, and compact AMP with copy stream')
+    parser.add_argument('--profile-data', action='store_true', help='Measure worker preprocessing stages on consumed batches')
     parser.add_argument('--output', default='profiles/local.json')
     args = parser.parse_args()
     config = load_experiment_config(args.config)
+    if args.profile_data and (args.compare_transfer or args.workers is not None):
+        parser.error('--profile-data runs one configuration; set workers through AIIJC_WORKERS')
     if args.compare_transfer and args.workers is not None:
         parser.error('Use --compare-transfer or --workers separately')
     if args.compare_transfer:
@@ -189,7 +203,7 @@ def main():
         report = benchmark_workers(config, args.workers, repeats=args.repeats,
                                    batches=args.batches, warmup=args.warmup)
     else:
-        report = benchmark(config, batches=args.batches, warmup=args.warmup)
+        report = benchmark(config, batches=args.batches, warmup=args.warmup, profile_data=args.profile_data)
     path = Path(args.output)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding='utf-8')
