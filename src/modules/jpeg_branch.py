@@ -2,6 +2,8 @@
 
 import logging
 
+import numpy as np
+from numpy.core.multiarray import scalar as numpy_scalar
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -59,7 +61,15 @@ class JPEGArtifactModule(nn.Module):
 
     def load_pretrained(self, path):
         """Load the complete CAT-Net artifact stem; ignore its HRNet and heads."""
-        checkpoint = torch.load(path, map_location='cpu', weights_only=True)
+        # Official CAT-Net v2 includes a NumPy scalar validation score. Allow
+        # only its numeric types, with both NumPy 1.x and 2.x pickle paths.
+        numeric_metadata = [
+            (numpy_scalar, 'numpy.core.multiarray.scalar'),
+            (numpy_scalar, 'numpy._core.multiarray.scalar'),
+            np.dtype, type(np.dtype('float32')), type(np.dtype('float64')),
+        ]
+        with torch.serialization.safe_globals(numeric_metadata):
+            checkpoint = torch.load(path, map_location='cpu', weights_only=True)
         state = checkpoint.get('state_dict', checkpoint)
         state = {key.removeprefix('module.'): value for key, value in state.items()}
         expected = self.state_dict()

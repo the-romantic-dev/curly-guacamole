@@ -52,3 +52,16 @@ def test_pretrained_recipe_and_builder_gate(monkeypatch):
     assert len(calls) == 1
     with pytest.raises(ValueError, match='jpeg'):
         ModelConfig(jpeg_pretrained='weights.pth')
+
+@pytest.mark.parametrize('dtype', [np.float32, np.float64])
+def test_load_legacy_checkpoint_with_numpy_metric(tmp_path, dtype):
+    source = JPEGArtifactModule()
+    path = tmp_path / 'legacy.pth'
+    torch.save({'state_dict': source.state_dict(), 'best_p_mIoU': dtype(.75),
+                'epoch': 100, 'optimizer': {}}, path, _use_new_zipfile_serialization=False)
+    before = list(torch.serialization.get_safe_globals())
+    target = JPEGArtifactModule()
+    target.load_pretrained(path)
+    assert torch.serialization.get_safe_globals() == before
+    for key, value in target.state_dict().items():
+        torch.testing.assert_close(value, source.state_dict()[key], rtol=0, atol=0)
