@@ -163,6 +163,7 @@ class ExperimentRunner:
                         {
                             "model": model.state_dict(),
                             "ema": ema.module.state_dict(),
+                            "ema_n_averaged": int(ema.n_averaged),
                             "epoch": epoch,
                             "samples": state.seen_total,
                             "best_aic": state.best_aic,
@@ -183,6 +184,7 @@ class ExperimentRunner:
                     {
                         "model": model.state_dict(),
                         "ema": ema.module.state_dict(),
+                        "ema_n_averaged": int(ema.n_averaged),
                         "optimizer": optimizer.state_dict(),
                         "scheduler": scheduler.state_dict(),
                         "scaler": scaler.state_dict(),
@@ -279,6 +281,9 @@ class ExperimentRunner:
         saved = run.load_state("last.pt", map_location=self.device)
         model.load_state_dict(saved["model"])
         ema.module.load_state_dict(saved["ema"])
+        # Older checkpoints saved only the averaged module. Constant-decay EMA
+        # needs any positive count to continue averaging instead of overwriting it.
+        ema.n_averaged.fill_(saved.get("ema_n_averaged", 1))
         optimizer.load_state_dict(saved["optimizer"])
         scheduler.load_state_dict(saved["scheduler"])
         if saved.get("scaler"):

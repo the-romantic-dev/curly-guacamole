@@ -84,8 +84,13 @@ class SegmentationLoss(torch.nn.Module):
             logits = out["aux_logits"].float()
             components["aux_bce"] = self.aux_weight * bce_loss(logits, target, valid_mask=valid)
             components["aux_dice"] = self.aux_weight * self.dice_weight * self._dice(logits, target, valid)[0]
-        if self.dct_aux_weight > 0:
+        available = out.get('dct_aux_available')
+        if self.dct_aux_weight > 0 and (available is None or available.any()):
             logits = out["dct_aux_logits"].float()
+            if available is not None:
+                logits = logits[available]
+                target = target[available]
+                valid = valid[available] if valid is not None else None
             size = logits.shape[-2:]
             aux_valid = None
             if valid is not None:

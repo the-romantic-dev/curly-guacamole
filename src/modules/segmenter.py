@@ -1,12 +1,13 @@
+import torch
 import torch.nn.functional as F
 from torch import nn
 
+from src.decoders import EMCADDecoder
 from src.forensic.dct.constants import CHANNEL_COUNT, STRIDE
 from src.modules.forensic_fusion import ForensicFusion
 from src.modules.gate_head import GateHead
 from src.modules.local_branch import LocalBranch
 from src.modules.luma_branch import LumaBranch
-from src.decoders import EMCADDecoder
 from src.modules.utils import build_timm_encoder
 
 
@@ -156,6 +157,9 @@ class Segmenter(nn.Module):
 
         if dct_aux_logits is not None:
             result["dct_aux_logits"] = dct_aux_logits
+        if self.training and self.forensic_mode == 'jpeg' and self.forensic_fusion.aux_head is not None:
+            result['dct_aux_available'] = torch.tensor(
+                [sample.get('available', True) for sample in jpeg], device=image.device, dtype=torch.bool)
         return result
 
     def _empty_forensic_map(self, image):

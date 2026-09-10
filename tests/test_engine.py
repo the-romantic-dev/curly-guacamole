@@ -150,7 +150,7 @@ def test_validate_accumulates_aic_histograms():
 
 
 def test_resume_state_starts_after_saved_epoch(tmp_path):
-    pytest.importorskip("torch")
+    torch = pytest.importorskip("torch")
 
     from src.training.engine import ExperimentRunner
 
@@ -190,7 +190,7 @@ def test_resume_state_starts_after_saved_epoch(tmp_path):
     model = StateObject()
     optimizer = StateObject()
     scheduler = StateObject()
-    ema = type("Ema", (), {"module": StateObject()})()
+    ema = type("Ema", (), {"module": StateObject(), "n_averaged": torch.tensor(0)})()
     scaler = StateObject()
 
     state = runner._resume_if_needed(
