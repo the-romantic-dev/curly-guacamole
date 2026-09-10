@@ -9,6 +9,7 @@ from torch import nn
 from torch.nn import functional as F
 
 from src.modules.dws_conv2d import DWSConv2d
+from src.modules.jpeg_experiments import SignedDCTProjector, SpatialFrequencyBlock, SubblockProjector
 
 
 class JPEGFrameBatchNorm2d(nn.BatchNorm2d):
@@ -81,8 +82,11 @@ class JPEGArtifactModule(nn.Module):
 class JPEGBranch(nn.Module):
     """Process each native frame without batch padding; align features for fusion."""
 
-    def __init__(self, channels):
+    def __init__(self, channels, variant='baseline'):
         super().__init__()
+        if variant not in {'baseline', 'signed', 'attention', 'subblock4'}:
+            raise ValueError('unknown JPEG variant')
+        self.variant = variant
         a, b, c = channels
         self.channels_by_stride = dict(zip((8, 16, 32), channels, strict=True))
         self.artifact = JPEGArtifactModule()
@@ -93,6 +97,13 @@ class JPEGBranch(nn.Module):
         # Native images run one at a time, so training BN is per-frame even
         # when the outer RGB batch contains multiple images.
         JPEGFrameBatchNorm2d.replace_in(self)
+        if variant == 'signed':
+            self.enhancement = SignedDCTProjector(a)
+        elif variant == 'attention':
+            self.enhancement = SpatialFrequencyBlock()
+        elif variant == 'subblock4':
+            self.enhancement = SubblockProjector(a)
+            self.channels_by_stride[4] = a
 
     @staticmethod
     def align(feature, geometry, stride, target_size, *, orientation=1, source_size=None):
@@ -122,9 +133,17 @@ class JPEGBranch(nn.Module):
     def forward(self, inputs, target_sizes):
         outputs = {stride: [] for stride in self.channels_by_stride}
         for sample in inputs:
-            x = self.refine(self.project(self.artifact(sample['bins'][None], sample['qtable'][None])))
+            artifact = self.artifact(sample['bins'][None], sample['qtable'][None])
+            if self.variant == 'attention':
+                artifact = self.enhancement(artifact)
+            x = self.project(artifact)
+            if self.variant == 'signed':
+                x = x + self.enhancement(sample['coefficients'][None])
+            x = self.refine(x)
             x16 = self.down16(x)
             features = {8: x, 16: x16, 32: self.down32(x16)}
+            if self.variant == 'subblock4':
+                features[4] = self.enhancement(sample['coefficients'][None], sample['qtable'][None])
             for stride, feature in features.items():
                 outputs[stride].append(self.align(feature, sample['geometry'], stride, target_sizes[stride],
                                                    orientation=sample.get('orientation', 1),

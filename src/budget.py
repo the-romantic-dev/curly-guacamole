@@ -38,6 +38,8 @@ def count_gflops(model, size: int, *, channels: int = 3, use_valid_mask: bool = 
                 kwargs['jpeg'] = [{'bins': torch.zeros(((h+7)//8*8, (w+7)//8*8), dtype=torch.uint8, device=device),
                                   'qtable': torch.ones(8, 8, device=device),
                                   'geometry': (0, 0, h, w, 0, 0, 0)}]
+                if getattr(model, 'jpeg_variant', 'baseline') in {'signed', 'subblock4'}:
+                    kwargs['jpeg'][0]['coefficients'] = torch.zeros_like(kwargs['jpeg'][0]['bins'], dtype=torch.int16)
             luma_size = getattr(model, 'luma_image_size', 0)
             if luma_size:
                 height, width = native_size or (luma_size, luma_size)

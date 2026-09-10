@@ -1,0 +1,5 @@
+extends: jpeg576_pretrained.yaml
+paths:
+  run_name: jpeg576_pretrained_positive_dice
+loss:
+  dice_scope: positive

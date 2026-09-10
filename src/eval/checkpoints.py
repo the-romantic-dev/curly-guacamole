@@ -84,7 +84,7 @@ class CheckpointEvaluator:
                               local_image_size=self.config.model.local_image_size,
                               luma_image_size=self.config.model.luma_image_size,
                               use_forensics=self.config.model.use_forensics,
-                              forensic_mode=self.config.model.forensic_mode)
+                              forensic_mode=self.config.model.forensic_mode, jpeg_variant=self.config.model.jpeg_variant)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.workers,
                             collate_fn=ValidationCollator(), worker_init_fn=DataLoaderThreadLimits.apply,
                             pin_memory=self.device.type == 'cuda')

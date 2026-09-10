@@ -8,6 +8,7 @@
 
 typedef struct {
     unsigned char *bins;
+    short *coefficients;
     int height, width, rows, cols;
     unsigned short qtable[64];
     char error[256];
@@ -19,7 +20,7 @@ static void reader_fail(j_common_ptr info) {
     longjmp(err->jump, 1);
 }
 
-int read_jpeg_bins(const unsigned char *bytes, unsigned long length, jpeg_result *out) {
+int read_jpeg_bins(const unsigned char *bytes, unsigned long length, int include_coefficients, jpeg_result *out) {
     struct jpeg_decompress_struct *info = calloc(1, sizeof(*info));
     struct reader_error err;
     jvirt_barray_ptr *arrays;
@@ -32,7 +33,7 @@ int read_jpeg_bins(const unsigned char *bytes, unsigned long length, jpeg_result
     if (setjmp(err.jump)) {
         (*info->err->format_message)((j_common_ptr)info, out->error);
         jpeg_destroy_decompress(info);
-        free(info); free(out->bins); out->bins = NULL;
+        free(info); free(out->bins); out->bins = NULL; free(out->coefficients); out->coefficients = NULL;
         return 0;
     }
     jpeg_create_decompress(info);
@@ -50,8 +51,10 @@ int read_jpeg_bins(const unsigned char *bytes, unsigned long length, jpeg_result
     out->rows = (int)component->height_in_blocks * 8;
     out->cols = (int)component->width_in_blocks * 8;
     out->bins = malloc((size_t)out->rows * out->cols);
-    if (!out->bins) {
+    if (include_coefficients) out->coefficients = malloc((size_t)out->rows * out->cols * sizeof(short));
+    if (!out->bins || (include_coefficients && !out->coefficients)) {
         strcpy(out->error, "JPEG coefficient allocation failed");
+        free(out->bins); free(out->coefficients); out->bins = NULL; out->coefficients = NULL;
         jpeg_destroy_decompress(info); free(info); return 0;
     }
     for (u = 0; u < 64; u++)
@@ -61,6 +64,7 @@ int read_jpeg_bins(const unsigned char *bytes, unsigned long length, jpeg_result
         for (bx = 0; bx < (int)component->width_in_blocks; bx++)
             for (u = 0; u < 8; u++) for (v = 0; v < 8; v++) {
                 value = row[0][bx][u * 8 + v];
+                if (out->coefficients) out->coefficients[(size_t)(by * 8 + u) * out->cols + bx * 8 + v] = (short)value;
                 if (value < 0) value = -value;
                 out->bins[(size_t)(by * 8 + u) * out->cols + bx * 8 + v] = (unsigned char)(value > 20 ? 20 : value);
             }
@@ -68,4 +72,4 @@ int read_jpeg_bins(const unsigned char *bytes, unsigned long length, jpeg_result
     jpeg_finish_decompress(info); jpeg_destroy_decompress(info); free(info);
     return 1;
 }
-void free_jpeg_bins(jpeg_result *out) { free(out->bins); out->bins = NULL; }
+void free_jpeg_bins(jpeg_result *out) { free(out->bins); out->bins = NULL; free(out->coefficients); out->coefficients = NULL; }

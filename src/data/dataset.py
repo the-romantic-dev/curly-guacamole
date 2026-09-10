@@ -43,6 +43,7 @@ class AIIJCDataset(Dataset):
             resize_mode: str = "stretch",
             use_forensics: bool = True,
             forensic_mode: str = 'maps',
+            jpeg_variant: str = 'baseline',
             local_image_size: int = 0,
             luma_image_size: int = 0,
             local_dtype: torch.dtype = torch.float32,
@@ -56,6 +57,7 @@ class AIIJCDataset(Dataset):
         if forensic_mode not in {'maps', 'jpeg'}:
             raise ValueError('unknown forensic_mode')
         self.forensic_mode = forensic_mode
+        self.jpeg_coefficients = jpeg_variant in {'signed', 'subblock4'}
         if forensic_mode == 'jpeg':
             if not use_forensics or resize_mode != 'stretch':
                 raise ValueError('jpeg mode requires forensics and stretch geometry')
@@ -105,7 +107,7 @@ class AIIJCDataset(Dataset):
         mask = self.load_mask(row, original_size) if self.has_targets else None
         if timer:
             timer.mark('read_mask')
-        jpeg = JPEGInput.read(image_path) if self.forensic_mode == 'jpeg' else None
+        jpeg = JPEGInput.read(image_path, include_coefficients=self.jpeg_coefficients) if self.forensic_mode == 'jpeg' else None
         qtable = jpeg.qtable if jpeg is not None else (luma_qtable(image_path) if self.use_forensics else None)
         if timer:
             timer.mark('qtable')

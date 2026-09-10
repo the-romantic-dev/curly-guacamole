@@ -69,6 +69,7 @@ class ModelConfig(ConfigSection):
     use_forensics: bool = True
     forensic_mode: str = 'maps'
     jpeg_pretrained: str | None = None
+    jpeg_variant: str = 'baseline'
     dct_aux_weight: float = 0.0
     decoder_kwargs: dict[str, Any] = field(default_factory=dict)
     local_image_size: int = 0
@@ -89,6 +90,10 @@ class ModelConfig(ConfigSection):
             raise ValueError('forensic_mode must be maps or jpeg')
         if self.forensic_mode == 'jpeg' and not self.use_forensics:
             raise ValueError('forensic_mode=jpeg requires use_forensics')
+        if self.jpeg_variant not in {'baseline', 'signed', 'attention', 'subblock4'}:
+            raise ValueError('unknown model.jpeg_variant')
+        if self.jpeg_variant != 'baseline' and self.forensic_mode != 'jpeg':
+            raise ValueError('jpeg_variant requires forensic_mode=jpeg')
         if self.jpeg_pretrained is not None:
             _non_empty_str(self.jpeg_pretrained, 'model.jpeg_pretrained')
             if self.forensic_mode != 'jpeg':

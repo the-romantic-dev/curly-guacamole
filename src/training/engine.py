@@ -242,6 +242,8 @@ class ExperimentRunner:
             for key, value in values.items():
                 # Snapshots predating the optional luma branch mean it was disabled.
                 default = 0 if section == 'model' and key == 'luma_image_size' else None
+                if section == 'model' and key == 'jpeg_variant':
+                    default = 'baseline'
                 previous = saved_values.get(key, default)
                 if isinstance(value, tuple) and isinstance(previous, list):
                     previous = tuple(previous)

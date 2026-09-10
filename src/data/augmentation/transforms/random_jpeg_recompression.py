@@ -21,7 +21,7 @@ class RandomJPEGRecompression(AIIJCAugmentation):
             self,
             image: np.ndarray,
             rng: np.random.Generator | None,
-            *, native=False,
+            *, native=False, include_coefficients=False,
     ):
         """JPEG re-encode image and extract the resulting luminance qtable."""
         bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
@@ -41,7 +41,7 @@ class RandomJPEGRecompression(AIIJCAugmentation):
         decoded = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
 
         if native:
-            jpeg = JPEGInput.read(jpeg_bytes)
+            jpeg = JPEGInput.read(jpeg_bytes, include_coefficients=include_coefficients)
             return decoded, jpeg.qtable, jpeg
         return decoded, luma_qtable(jpeg_bytes)
 
@@ -54,7 +54,8 @@ class RandomJPEGRecompression(AIIJCAugmentation):
             return sample
 
         if sample.jpeg is not None:
-            image, qtable, jpeg = self.jpeg_recompression(sample.image, rng, native=True)
+            image, qtable, jpeg = self.jpeg_recompression(
+                sample.image, rng, native=True, include_coefficients=sample.jpeg.coefficients is not None)
             return replace(sample, image=image, qtable=qtable, jpeg=jpeg)
         image, qtable = self.jpeg_recompression(sample.image, rng)
         return replace(sample, image=image, qtable=qtable)

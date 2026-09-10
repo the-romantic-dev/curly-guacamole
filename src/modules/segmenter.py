@@ -26,6 +26,7 @@ class Segmenter(nn.Module):
         pretrained=True,
         use_forensics=True,
         forensic_mode='maps',
+        jpeg_variant='baseline',
         dct_aux_weight=0.0,
         decoder_kwargs=None,
         local_image_size=0,
@@ -33,6 +34,7 @@ class Segmenter(nn.Module):
     ):
         super().__init__()
         self.forensic_mode = forensic_mode
+        self.jpeg_variant = jpeg_variant
         if type(local_image_size) is not int or local_image_size < 0 or local_image_size % 32:
             raise ValueError('local_image_size must be 0 or a positive multiple of 32')
         if local_image_size and any(
@@ -59,6 +61,7 @@ class Segmenter(nn.Module):
             forensic_channels,
             use_aux=dct_aux_weight > 0,
             forensic_mode=forensic_mode,
+            jpeg_variant=jpeg_variant,
         ) if use_forensics else None
 
         self.decoder = EMCADDecoder(

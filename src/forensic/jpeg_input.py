@@ -18,9 +18,9 @@ def _decoder():
 
     ffi = FFI()
     ffi.cdef('''
-        typedef struct { unsigned char *bins; int height, width, rows, cols;
+        typedef struct { unsigned char *bins; short *coefficients; int height, width, rows, cols;
             unsigned short qtable[64]; char error[256]; } jpeg_result;
-        int read_jpeg_bins(const unsigned char *, unsigned long, jpeg_result *);
+        int read_jpeg_bins(const unsigned char *, unsigned long, int, jpeg_result *);
         void free_jpeg_bins(jpeg_result *);
     ''')
     prefix = Path(sys.prefix) / ('Library' if os.name == 'nt' else '')
@@ -47,13 +47,14 @@ class JPEGInput:
     orientation: int = 1
     source_size: tuple[int, int] | None = None
     available: bool = True
+    coefficients: np.ndarray | None = None
 
     @staticmethod
     def prepare_decoder():
         _decoder()
 
     @classmethod
-    def read(cls, source):
+    def read(cls, source, *, include_coefficients=False):
         data = source if isinstance(source, bytes) else Path(source).read_bytes()
         if data.startswith(b'\x89PNG\r\n\x1a\n'):
             # Some originals are PNG files named .jpg. They have no JPEG DCT.
@@ -61,16 +62,20 @@ class JPEGInput:
                 w, h = image.size
                 image.verify()
             return cls(np.empty((0, 0), np.uint8), np.ones((8, 8), np.float32),
-                       (0, 0, h, w, 0, 0, 0), source_size=(h, w), available=False)
+                       (0, 0, h, w, 0, 0, 0), source_size=(h, w), available=False,
+                       coefficients=np.empty((0, 0), np.int16) if include_coefficients else None)
         ffi, decoder = _decoder()
         result = ffi.new('jpeg_result *')
-        if not decoder.read_jpeg_bins(data, len(data), result):
+        if not decoder.read_jpeg_bins(data, len(data), include_coefficients, result):
             origin = '<in-memory JPEG>' if isinstance(source, bytes) else str(source)
             reason = ffi.string(result.error).decode(errors='replace')
             raise ValueError(f'Cannot read JPEG [{origin}]: {reason}')
         try:
             bins = np.frombuffer(ffi.buffer(result.bins, result.rows * result.cols), np.uint8).copy()
             bins = bins.reshape(result.rows, result.cols)
+            coefficients = (np.frombuffer(ffi.buffer(result.coefficients, result.rows * result.cols * 2),
+                                          np.int16).copy().reshape(result.rows, result.cols)
+                            if include_coefficients else None)
             qtable = np.frombuffer(ffi.buffer(result.qtable), np.uint16).astype(np.float32).reshape(8, 8)
             with Image.open(io.BytesIO(data)) as image:
                 orientation = int(image.getexif().get(274, 1))
@@ -78,7 +83,7 @@ class JPEGInput:
                 raise ValueError('Unsupported JPEG EXIF orientation')
             h, w = result.height, result.width
             oriented = (w, h) if orientation >= 5 else (h, w)
-            return cls(bins, qtable, (0, 0, *oriented, 0, 0, 0), orientation, (h, w))
+            return cls(bins, qtable, (0, 0, *oriented, 0, 0, 0), orientation, (h, w), coefficients=coefficients)
         finally:
             decoder.free_jpeg_bins(result)
 
@@ -89,6 +94,10 @@ class JPEGInput:
         return replace(self, geometry=(*self.geometry[:4], rotations, int(horizontal), int(vertical)))
 
     def tensors(self):
-        return {'bins': torch.from_numpy(self.bins), 'qtable': torch.from_numpy(self.qtable),
+        result = {'bins': torch.from_numpy(self.bins), 'qtable': torch.from_numpy(self.qtable),
                 'geometry': self.geometry, 'orientation': self.orientation, 'source_size': self.source_size,
                 'available': self.available}
+
+        if self.coefficients is not None:
+            result['coefficients'] = torch.from_numpy(self.coefficients)
+        return result

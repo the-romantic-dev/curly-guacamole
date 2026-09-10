@@ -132,7 +132,7 @@ def create_submission(
                            local_image_size=config.model.local_image_size,
                            luma_image_size=config.model.luma_image_size,
                            use_forensics=config.model.use_forensics,
-                           forensic_mode=config.model.forensic_mode)
+                           forensic_mode=config.model.forensic_mode, jpeg_variant=config.model.jpeg_variant)
     inference_device = torch.device(device or config.device)
     ConsoleProgress.info(
         f"Submission: изображений {len(test_rows)}, устройство {inference_device}, "

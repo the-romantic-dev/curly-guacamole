@@ -11,7 +11,7 @@ class ForensicFusion(nn.Module):
 
     FUSION_STRIDES = (8, 16, 32)
 
-    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False, forensic_mode='maps'):
+    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False, forensic_mode='maps', jpeg_variant='baseline'):
         super().__init__()
 
         if len(encoder_strides) != len(encoder_channels):
@@ -23,8 +23,9 @@ class ForensicFusion(nn.Module):
                 f"expected {len(self.FUSION_STRIDES)} forensic channel groups, got {len(forensic_channels)}"
             )
 
+        self.fusion_strides = (4, 8, 16, 32) if jpeg_variant == 'subblock4' else self.FUSION_STRIDES
         missing_strides = [
-            stride for stride in self.FUSION_STRIDES
+            stride for stride in self.fusion_strides
             if stride not in encoder_strides
         ]
         if missing_strides:
@@ -33,7 +34,7 @@ class ForensicFusion(nn.Module):
         self.encoder_strides = encoder_strides
         self.forensic_mode = forensic_mode
 
-        self.branch = JPEGBranch(forensic_channels) if forensic_mode == 'jpeg' else ForensicBranch(
+        self.branch = JPEGBranch(forensic_channels, variant=jpeg_variant) if forensic_mode == 'jpeg' else ForensicBranch(
             in_ch=CHANNEL_COUNT,
             channels=forensic_channels,
         )
@@ -45,7 +46,7 @@ class ForensicFusion(nn.Module):
                 encoder_channels[encoder_strides.index(stride)],
                 self.branch.channels_by_stride[stride],
             )
-            for stride in self.FUSION_STRIDES
+            for stride in self.fusion_strides
         })
 
     def gate_stats(self) -> dict[str, float]:
@@ -75,12 +76,12 @@ class ForensicFusion(nn.Module):
                     full_aux[available] = aux
                     aux = full_aux
                 return result, aux
-            sizes = {s: encoder_features[self.encoder_strides.index(s)].shape[-2:] for s in self.FUSION_STRIDES}
+            sizes = {s: encoder_features[self.encoder_strides.index(s)].shape[-2:] for s in self.fusion_strides}
             forensic_features = self.branch(jpeg, sizes)
         else:
             forensic_features = self.branch(forensic_map)
 
-        for stride in self.FUSION_STRIDES:
+        for stride in self.fusion_strides:
             index = self.encoder_strides.index(stride)
 
             encoder_features[index] = self.fusion_blocks[str(stride)](

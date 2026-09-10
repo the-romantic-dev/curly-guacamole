@@ -26,14 +26,15 @@ class BatchTransfer:
         for value in result.get('native_rgb', []):
             value.record_stream(compute)
         for sample in result.get('jpeg', []):
-            sample['bins'].record_stream(compute)
-            sample['qtable'].record_stream(compute)
+            for value in sample.values():
+                if torch.is_tensor(value) and value.is_cuda:
+                    value.record_stream(compute)
         return result
 
     @staticmethod
     def move_jpeg(inputs, device):
-        return [{**sample, 'bins': sample['bins'].to(device, non_blocking=True),
-                 'qtable': sample['qtable'].to(device, non_blocking=True)} for sample in inputs]
+        return [{key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
+                 for key, value in sample.items()} for sample in inputs]
 
     def _copy(self, batch):
         result = {key: value.to(self.device, non_blocking=True) if torch.is_tensor(value) else value
