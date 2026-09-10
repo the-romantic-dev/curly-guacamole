@@ -9,6 +9,32 @@ from torch.nn import functional as F
 from src.modules.dws_conv2d import DWSConv2d
 
 
+class JPEGFrameBatchNorm2d(nn.BatchNorm2d):
+    """Use native-frame statistics in eval, matching this branch's training.
+
+    Keep standard training behavior and checkpoint buffers for compatibility.
+    Evaluation neither reads nor updates the running statistics.
+    """
+
+    def forward(self, x):
+        if self.training:
+            return super().forward(x)
+        return F.batch_norm(x, None, None, self.weight, self.bias,
+                            training=True, momentum=0.0, eps=self.eps)
+
+    @classmethod
+    def replace_in(cls, module):
+        for name, child in module.named_children():
+            if isinstance(child, nn.BatchNorm2d):
+                replacement = cls(child.num_features, eps=child.eps,
+                                  momentum=child.momentum, affine=child.affine,
+                                  track_running_stats=child.track_running_stats)
+                replacement.load_state_dict(child.state_dict())
+                setattr(module, name, replacement)
+            else:
+                cls.replace_in(child)
+
+
 class JPEGArtifactModule(nn.Module):
     """Frequency-wise CAT-Net stem; input is min(abs(quantized Y DCT), 20)."""
 
@@ -54,6 +80,9 @@ class JPEGBranch(nn.Module):
         self.refine = DWSConv2d(a, a)
         self.down16 = DWSConv2d(a, b, stride=2)
         self.down32 = DWSConv2d(b, c, stride=2)
+        # Native images run one at a time, so training BN is per-frame even
+        # when the outer RGB batch contains multiple images.
+        JPEGFrameBatchNorm2d.replace_in(self)
 
     @staticmethod
     def align(feature, geometry, stride, target_size, *, orientation=1, source_size=None):
