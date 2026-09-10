@@ -83,6 +83,7 @@ class CheckpointEvaluator:
                               resize_mode=self.config.resize_mode,
                               local_image_size=self.config.model.local_image_size,
                               luma_image_size=self.config.model.luma_image_size,
+                              strided_resize=self.config.model.strided_resize,
                               use_forensics=self.config.model.use_forensics,
                               forensic_mode=self.config.model.forensic_mode, jpeg_variant=self.config.model.jpeg_variant)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.workers,

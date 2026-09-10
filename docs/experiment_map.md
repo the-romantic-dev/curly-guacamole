@@ -7,6 +7,10 @@
 | [baseline](../configs/baseline.yaml) | emcad_mixed_original_fixed_val_natural_q_light | Общие условия стали поведением pipeline |
 | [dct576](../configs/dct576.yaml) | baseline | RGB 576, текущая forensic-ветка |
 | [rgb576](../configs/rgb576.yaml) | dct576 | Forensic-ветка отключена |
+| [rgb576_no_aux](../configs/rgb576_no_aux.yaml) | rgb576 | Aux-голова отключена: вес 0 вместо 0.4; остальные настройки наследуются. Сравнивать validation AIC, Dice_pos и FPR_neg |
+| [rgb576_strided](../configs/rgb576_strided.yaml) | rgb576 | RGB1152 → обучаемая Conv3×3 stride 2 → RGB576 → ImageNet-нормализация; [описание](strided_resize.md) |
+| [rgb576_strided_gn](../configs/rgb576_strided_gn.yaml) | rgb576_strided | GroupNorm вместо BatchNorm в EMCAD; отдельное обучение |
+| [rgb576_strided_mlp](../configs/rgb576_strided_mlp.yaml) | rgb576_strided | Ресайзер Conv3×3 3→16 → GELU → Conv3×3 16→3 stride 2; BatchNorm |
 | [jpeg576](../configs/jpeg576.yaml) | dct576 | Native JPEG Artifact Module + компактная пирамида; [условия сравнения](jpeg_ablation.md) |
 | [jpeg576_pretrained](../configs/jpeg576_pretrained.yaml) | jpeg576 | Инициализация JPEG Artifact Module из `DCT_djpeg.pth`, с последующим дообучением |
 | [positive_dice](../configs/positive_dice.yaml) | baseline_positive_dice_mixed_original; последующий EMCAD positive-Dice | Dice только по позитивам, вес 1 |

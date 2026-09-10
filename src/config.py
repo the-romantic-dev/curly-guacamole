@@ -74,9 +74,19 @@ class ModelConfig(ConfigSection):
     decoder_kwargs: dict[str, Any] = field(default_factory=dict)
     local_image_size: int = 0
     luma_image_size: int = 0
+    strided_resize: bool = False
+    resize_variant: str = 'linear'
 
     def __post_init__(self):
         _non_empty_str(self.encoder_name, 'model.encoder_name')
+        if type(self.strided_resize) is not bool:
+            raise ValueError('model.strided_resize must be boolean')
+        if self.resize_variant not in {'linear', 'nonlinear'}:
+            raise ValueError('unknown model.resize_variant')
+        if self.resize_variant != 'linear' and not self.strided_resize:
+            raise ValueError('resize_variant requires strided_resize')
+        if self.strided_resize and (self.use_forensics or self.local_image_size or self.luma_image_size):
+            raise ValueError('strided_resize requires RGB-only without local/luma branches')
         object.__setattr__(self, 'forensic_channels', tuple(self.forensic_channels))
         if len(self.forensic_channels) != 3 or any(type(c) is not int or c <= 0 for c in self.forensic_channels):
             raise ValueError('model.forensic_channels must contain three positive integers')
@@ -254,6 +264,8 @@ class ExperimentConfig:
             raise ValueError('forensic_mode=jpeg requires stretch geometry')
         if self.model.luma_image_size and self.dataset.resize_mode != 'stretch':
             raise ValueError('luma_image_size currently requires stretch geometry')
+        if self.model.strided_resize and self.dataset.resize_mode != 'stretch':
+            raise ValueError('strided_resize requires stretch geometry')
 
     def to_dict(self):
         result = {'pipeline_version': PIPELINE_VERSION, 'paths': self.paths.to_dict(), 'seed': self.seed}

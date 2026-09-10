@@ -244,6 +244,10 @@ class ExperimentRunner:
                 default = 0 if section == 'model' and key == 'luma_image_size' else None
                 if section == 'model' and key == 'jpeg_variant':
                     default = 'baseline'
+                if section == 'model' and key == 'strided_resize':
+                    default = False
+                if section == 'model' and key == 'resize_variant':
+                    default = 'linear'
                 previous = saved_values.get(key, default)
                 if isinstance(value, tuple) and isinstance(previous, list):
                     previous = tuple(previous)

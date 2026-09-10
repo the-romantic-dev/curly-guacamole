@@ -8,6 +8,7 @@ from src.modules.forensic_fusion import ForensicFusion
 from src.modules.gate_head import GateHead
 from src.modules.local_branch import LocalBranch
 from src.modules.luma_branch import LumaBranch
+from src.modules.strided_resize import StridedResize
 from src.modules.utils import build_timm_encoder
 
 
@@ -31,8 +32,16 @@ class Segmenter(nn.Module):
         decoder_kwargs=None,
         local_image_size=0,
         luma_image_size=0,
+        strided_resize=False,
+        resize_variant='linear',
     ):
         super().__init__()
+        if strided_resize and (use_forensics or local_image_size or luma_image_size):
+            raise ValueError('strided_resize requires RGB-only without local/luma branches')
+        self.strided_resize = strided_resize
+        if resize_variant != 'linear' and not strided_resize:
+            raise ValueError('resize_variant requires strided_resize')
+        self.input_resize = StridedResize(resize_variant) if strided_resize else None
         self.forensic_mode = forensic_mode
         self.jpeg_variant = jpeg_variant
         if type(local_image_size) is not int or local_image_size < 0 or local_image_size % 32:
@@ -93,6 +102,10 @@ class Segmenter(nn.Module):
         return self.forensic_fusion.gate_stats() if self.forensic_fusion is not None else {"max_abs": 0.0}
 
     def forward(self, image, forensic_map=None, valid_mask=None, *, local_input=None, native_rgb=None, jpeg=None):
+        if self.input_resize is not None:
+            if valid_mask is not None:
+                raise ValueError('strided_resize requires stretch geometry')
+            image = self.input_resize(image)
         input_size = image.shape[-2:]
         if self.forensic_mode == 'jpeg':
             if not isinstance(jpeg, (list, tuple)) or len(jpeg) != image.shape[0]:

@@ -1,0 +1,5 @@
+extends: rgb576_strided.yaml
+paths:
+  run_name: rgb576_strided_mlp
+model:
+  resize_variant: nonlinear

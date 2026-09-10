@@ -18,12 +18,13 @@ from src.data.targets import mask_to_tensor
 from src.forensic.dct import resize_fmaps
 
 
-def image_resize(sample: DataSample, size: int) -> DataSample:
+def image_resize(sample: DataSample, size: int, *, rgb_size: int | None = None) -> DataSample:
     # size = require_model_size(sample)
     image = sample.image
     fmap = sample.fmap
 
-    image = cv2.resize(image, (size, size), interpolation=cv2.INTER_LINEAR)
+    rgb_size = size if rgb_size is None else rgb_size
+    image = cv2.resize(image, (rgb_size, rgb_size), interpolation=cv2.INTER_LINEAR)
     fmap = resize_fmaps(fmap, size)
     mask = (
         cv2.resize(sample.mask, (size, size), interpolation=cv2.INTER_LINEAR)
@@ -58,8 +59,11 @@ class SamplePreprocessor:
     """Prepare synchronized samples for the model and optional target heads."""
 
     def __init__(self, image_size: int, fmap_channels: Sequence[int] | None = None,
-                 resize_mode: str = "stretch"):
+                 resize_mode: str = "stretch", *, strided_resize: bool = False):
         self.image_size = image_size
+        self.strided_resize = strided_resize
+        if strided_resize and resize_mode != 'stretch':
+            raise ValueError('strided_resize requires stretch geometry')
         self.fmap_channels = fmap_channels
         if resize_mode not in {"stretch", "letterbox"}:
             raise ValueError("resize_mode must be 'stretch' or 'letterbox'")
@@ -68,10 +72,12 @@ class SamplePreprocessor:
     def resize(self, sample: DataSample) -> DataSample:
         if self.letterbox is not None:
             return self.letterbox.apply(sample)
-        return image_resize(sample, self.image_size)
+        return image_resize(sample, self.image_size,
+                            rgb_size=self.image_size * 2 if self.strided_resize else None)
 
     def to_output(self, sample: DataSample) -> dict[str, torch.Tensor]:
-        sample = imagenet_normalize(sample)
+        sample = (replace(sample, image=image_to_tensor(sample.image))
+                  if self.strided_resize else imagenet_normalize(sample))
         fmap = require_fmap(sample)
         if self.fmap_channels is not None:
             fmap = fmap[list(self.fmap_channels)]

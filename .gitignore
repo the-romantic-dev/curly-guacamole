@@ -46,3 +46,4 @@ predictions/
 docs/*
 !docs/luma_branch.md
 !docs/jpeg_ablation.md
+!docs/strided_resize.md

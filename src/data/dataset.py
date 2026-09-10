@@ -47,6 +47,7 @@ class AIIJCDataset(Dataset):
             local_image_size: int = 0,
             luma_image_size: int = 0,
             local_dtype: torch.dtype = torch.float32,
+            strided_resize: bool = False,
     ):
         super().__init__()
         self.data_workspace = data_workspace
@@ -54,6 +55,9 @@ class AIIJCDataset(Dataset):
         self.train = self.mode == "train"
         self.has_targets = self.mode in {"train", "val"}
         self.use_forensics = use_forensics
+        if strided_resize and (use_forensics or local_image_size or luma_image_size):
+            raise ValueError('strided_resize requires RGB-only without local/luma branches')
+        self.strided_resize = strided_resize
         if forensic_mode not in {'maps', 'jpeg'}:
             raise ValueError('unknown forensic_mode')
         self.forensic_mode = forensic_mode
@@ -84,7 +88,8 @@ class AIIJCDataset(Dataset):
         self.fmap_channels = fmap_channels
         self.root = data_workspace.train_root if self.has_targets else data_workspace.test_root
         self.sample_io = SampleIO(self.root, self.has_targets)
-        self.preprocessor = SamplePreprocessor(image_size, fmap_channels, resize_mode)
+        self.preprocessor = SamplePreprocessor(image_size, fmap_channels, resize_mode,
+                                              strided_resize=strided_resize)
         self.sample_io.validate_dataframe(folded_df)
         self.df = folded_df.reset_index(drop=True)
         self.is_negative = (

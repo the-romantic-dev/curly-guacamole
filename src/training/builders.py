@@ -74,6 +74,8 @@ def build_model(config: ModelConfig, *, pretrained: bool = True) -> Segmenter:
         decoder_kwargs=config.decoder_kwargs,
         local_image_size=config.local_image_size,
         luma_image_size=config.luma_image_size,
+        strided_resize=config.strided_resize,
+        resize_variant=config.resize_variant,
     )
     if pretrained and config.jpeg_pretrained is not None:
         path = Path(config.jpeg_pretrained)
@@ -121,6 +123,7 @@ def build_datasets(
         resize_mode=config.dataset.resize_mode,
         local_image_size=config.model.local_image_size,
         luma_image_size=config.model.luma_image_size,
+        strided_resize=config.model.strided_resize,
         local_dtype=local_dtype,
     )
 
@@ -140,6 +143,7 @@ def build_datasets(
         original_targets=True,
         local_image_size=config.model.local_image_size,
         luma_image_size=config.model.luma_image_size,
+        strided_resize=config.model.strided_resize,
         local_dtype=local_dtype,
     )
 
@@ -176,6 +180,7 @@ def build_loaders(
     DataLoaderThreadLimits.apply()
     pin_memory = torch.device(config.device).type == "cuda"
     local = (getattr(train_ds, 'local_preprocessor', None) is not None
+             or bool(getattr(train_ds, 'strided_resize', False))
              or bool(getattr(train_ds, 'luma_image_size', 0))
              or getattr(train_ds, 'forensic_mode', 'maps') == 'jpeg')
     # Local views are 60 MiB each; avoid buffering two huge batches per worker.

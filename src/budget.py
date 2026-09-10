@@ -44,7 +44,8 @@ def count_gflops(model, size: int, *, channels: int = 3, use_valid_mask: bool = 
             if luma_size:
                 height, width = native_size or (luma_size, luma_size)
                 kwargs['native_rgb'] = [torch.zeros(3, height, width, dtype=torch.uint8, device=device)]
-            model(torch.zeros(1, channels, size, size, device=device), **kwargs)
+            input_size = size * 2 if getattr(model, 'strided_resize', False) else size
+            model(torch.zeros(1, channels, input_size, input_size, device=device), **kwargs)
     finally:
         for module, training in modes:
             module.training = training
