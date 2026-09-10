@@ -5,6 +5,7 @@ from src.forensic.dct.constants import CHANNEL_COUNT, STRIDE
 from src.modules.forensic_fusion import ForensicFusion
 from src.modules.gate_head import GateHead
 from src.modules.local_branch import LocalBranch
+from src.modules.luma_branch import LumaBranch
 from src.decoders import EMCADDecoder
 from src.modules.utils import build_timm_encoder
 
@@ -23,11 +24,14 @@ class Segmenter(nn.Module):
         *,
         pretrained=True,
         use_forensics=True,
+        forensic_mode='maps',
         dct_aux_weight=0.0,
         decoder_kwargs=None,
         local_image_size=0,
+        luma_image_size=0,
     ):
         super().__init__()
+        self.forensic_mode = forensic_mode
         if type(local_image_size) is not int or local_image_size < 0 or local_image_size % 32:
             raise ValueError('local_image_size must be 0 or a positive multiple of 32')
         if local_image_size and any(
@@ -35,6 +39,12 @@ class Segmenter(nn.Module):
                 for key in ('rgb_refinement_channels', 'output_refinement_channels')):
             raise ValueError('local_image_size requires EMCAD without other refinement experiments')
         self.local_image_size = local_image_size
+        if type(luma_image_size) is not int or luma_image_size < 0 or luma_image_size % 32:
+            raise ValueError('luma_image_size must be 0 or a positive multiple of 32')
+        if luma_image_size and (local_image_size or any((decoder_kwargs or {}).get(key, 0)
+                for key in ('rgb_refinement_channels', 'output_refinement_channels'))):
+            raise ValueError('luma_image_size requires EMCAD without other detail branches')
+        self.luma_image_size = luma_image_size
 
         self.encoder, self.strides, self.channels = build_timm_encoder(
             encoder_name, pretrained=pretrained
@@ -47,16 +57,18 @@ class Segmenter(nn.Module):
             self.channels,
             forensic_channels,
             use_aux=dct_aux_weight > 0,
+            forensic_mode=forensic_mode,
         ) if use_forensics else None
 
         self.decoder = EMCADDecoder(
             encoder_channels=self.channels,
             encoder_strides=self.strides,
             norm=norm,
-            use_aux=aux_weight > 0 and not local_image_size,
+            use_aux=aux_weight > 0 and not (local_image_size or luma_image_size),
             **(decoder_kwargs or {}),
         )
         self.local_branch = LocalBranch(self.decoder.out_channels, aux_weight > 0) if local_image_size else None
+        self.luma_branch = LumaBranch(self.decoder.out_channels, luma_image_size, aux_weight > 0) if luma_image_size else None
 
         head_kernel = self.decoder.head_kernel_size
         self.segmentation_head = nn.Conv2d(
@@ -76,8 +88,22 @@ class Segmenter(nn.Module):
         """Detached gate statistics for experiment logging."""
         return self.forensic_fusion.gate_stats() if self.forensic_fusion is not None else {"max_abs": 0.0}
 
-    def forward(self, image, forensic_map=None, valid_mask=None, *, local_input=None):
+    def forward(self, image, forensic_map=None, valid_mask=None, *, local_input=None, native_rgb=None, jpeg=None):
         input_size = image.shape[-2:]
+        if self.forensic_mode == 'jpeg':
+            if not isinstance(jpeg, (list, tuple)) or len(jpeg) != image.shape[0]:
+                raise ValueError('jpeg inputs must contain one native frame per image')
+            if valid_mask is not None:
+                raise ValueError('jpeg inputs require stretch geometry')
+        elif jpeg is not None:
+            raise ValueError('jpeg inputs require forensic_mode=jpeg')
+        if self.luma_branch is not None:
+            if not isinstance(native_rgb, (list, tuple)) or len(native_rgb) != image.shape[0]:
+                raise ValueError('native_rgb must contain one native image per batch sample')
+            if valid_mask is not None:
+                raise ValueError('native_rgb currently requires stretch geometry')
+        elif native_rgb is not None:
+            raise ValueError('native_rgb supplied with luma branch disabled')
         if self.local_branch is not None:
             expected = (image.shape[0], 15, self.local_image_size, self.local_image_size)
             if local_input is None or tuple(local_input.shape) != expected:
@@ -97,16 +123,18 @@ class Segmenter(nn.Module):
                 forensic_map = self._empty_forensic_map(image)
             if self.training:
                 encoder_features, dct_aux_logits = self.forensic_fusion(
-                    encoder_features, forensic_map, return_aux=True,
+                    encoder_features, forensic_map, return_aux=True, jpeg=jpeg,
                 )
             else:
-                encoder_features = self.forensic_fusion(encoder_features, forensic_map)
+                encoder_features = self.forensic_fusion(encoder_features, forensic_map, jpeg=jpeg)
 
         decoder_features, aux_logits = self.decoder(
             encoder_features
         )
         if self.local_branch is not None:
             decoder_features, aux_logits = self.local_branch(local_input, decoder_features)
+        if self.luma_branch is not None:
+            decoder_features, aux_logits = self.luma_branch(native_rgb, decoder_features)
 
         logits = self.segmentation_head(
             decoder_features

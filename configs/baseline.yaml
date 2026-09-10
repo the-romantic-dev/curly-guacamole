@@ -18,6 +18,7 @@ model:
   dct_aux_weight: 0.0
   decoder_kwargs: {}
   local_image_size: 0
+  luma_image_size: 0
 
 dataset:
   image_size: 640
@@ -42,7 +43,7 @@ train:
   amp: bf16
   ema_decay: 0.999
   grad_clip: 1.0
-  resume: false
+  resume: true
 
 eval:
   n_bins: 256

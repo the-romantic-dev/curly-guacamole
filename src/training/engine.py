@@ -69,10 +69,13 @@ class ExperimentRunner:
         ConsoleProgress.info(f"Разбиение готово: train={len(train_df)}, val={len(val_df)}; создание датасетов и аугментаций")
         train_ds, val_ds = build_datasets(cfg, self.data_workspace, train_df, val_df)
         ConsoleProgress.info(f"Создание модели {cfg.model.encoder_name}, загрузка pretrained-весов и перенос на {self.device}")
-        model = build_model(cfg.model).to(self.device, memory_format=torch.channels_last)
+        model = build_model(cfg.model, pretrained=not cfg.train.resume).to(self.device, memory_format=torch.channels_last)
         ConsoleProgress.info("Модель готова; подсчёт GFLOPS")
         gflops = count_gflops(model, cfg.dataset.image_size,
-                             use_valid_mask=cfg.dataset.resize_mode == "letterbox")
+                             use_valid_mask=cfg.dataset.resize_mode == "letterbox",
+                             native_size=(1024, 1024) if cfg.model.forensic_mode == "jpeg" else None)
+        if cfg.model.forensic_mode == "jpeg":
+            ConsoleProgress.info("JPEG GFLOPs measured at native 1024x1024; larger frames cost more")
         ConsoleProgress.info(f"Подсчёт завершён: {gflops:.2f} GFLOPS; создание оптимизатора")
         optimizer = build_optimizer(cfg.train, model)
         ConsoleProgress.info(f"Создание DataLoader: batch_size={cfg.train.batch_size}, workers={cfg.train.workers}")
@@ -226,7 +229,9 @@ class ExperimentRunner:
             values = cfg.to_dict()[section]
             saved_values = snapshot.get(section, snapshot)
             for key, value in values.items():
-                previous = saved_values.get(key)
+                # Snapshots predating the optional luma branch mean it was disabled.
+                default = 0 if section == 'model' and key == 'luma_image_size' else None
+                previous = saved_values.get(key, default)
                 if isinstance(value, tuple) and isinstance(previous, list):
                     previous = tuple(previous)
                 if previous != value:
@@ -241,7 +246,11 @@ class ExperimentRunner:
         return protocol.rows('train'), development
 
     def _snapshot(self, plain_config: dict, gflops: float) -> dict:
-        return {**plain_config, 'arm': self.arm, 'fmap_channels': FMAP_CHANNELS, 'gflops': round(gflops, 3)}
+        result = {**plain_config, 'arm': self.arm, 'fmap_channels': FMAP_CHANNELS, 'gflops': round(gflops, 3)}
+        if self.config.model.forensic_mode == 'jpeg':
+            result['gflops_native_size'] = [1024, 1024]
+            result['gflops_variable_native_size'] = True
+        return result
 
     def _resume_if_needed(
         self,
@@ -345,7 +354,9 @@ class ExperimentRunner:
                 ),
                 "samples": state.seen_total,
                 "gflops": round(gflops, 1),
-                "within_limit": gflops <= 100,
+                "within_limit": None if self.config.model.forensic_mode == 'jpeg' else gflops <= 100,
+                "gflops_native_size": [1024, 1024] if self.config.model.forensic_mode == 'jpeg' else None,
+                "reference_within_limit": gflops <= 100,
                 "validation_resolution": "original",
                 "training_complete": True,
             }
@@ -390,8 +401,12 @@ def train_one_epoch(
 
         with amp.autocast():
             model_kwargs = {"valid_mask": batch["valid_mask"]} if "valid_mask" in batch else {}
+            if 'jpeg' in batch:
+                model_kwargs['jpeg'] = batch['jpeg']
             if 'local_input' in batch:
                 model_kwargs['local_input'] = batch['local_input']
+            if 'native_rgb' in batch:
+                model_kwargs['native_rgb'] = batch['native_rgb']
             loss_result = criterion(
                 model(images, batch.get("fmap"), **model_kwargs),
                 batch,
@@ -458,10 +473,7 @@ def _move_batch_to_device(
     batch: dict[str, object],
     device: torch.device,
 ) -> dict[str, object]:
-    return {
-        key: value.to(device, non_blocking=True) if torch.is_tensor(value) else value
-        for key, value in batch.items()
-    }
+    return BatchTransfer(device, asynchronous=False)(batch)
 
 
 

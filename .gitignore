@@ -43,4 +43,6 @@ runs/archive/*/*
 submissions/
 submission.zip
 predictions/
-docs/
+docs/*
+!docs/luma_branch.md
+!docs/jpeg_ablation.md

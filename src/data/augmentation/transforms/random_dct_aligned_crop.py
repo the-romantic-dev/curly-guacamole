@@ -61,7 +61,8 @@ class RandomDCTAlignedCrop(AIIJCAugmentation):
             else None
         )
 
-        return replace(sample, image=image, mask=mask, fmap=fmap)
+        jpeg = sample.jpeg.crop(top, left, side, side) if sample.jpeg is not None else None
+        return replace(sample, image=image, mask=mask, fmap=fmap, jpeg=jpeg)
 
     @staticmethod
     def _origin_containing(pixel: int, length: int, side: int, rng) -> int:

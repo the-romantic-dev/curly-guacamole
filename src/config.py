@@ -67,9 +67,12 @@ class ModelConfig(ConfigSection):
     aux_weight: float = 0.4
     norm: str = 'batch'
     use_forensics: bool = True
+    forensic_mode: str = 'maps'
+    jpeg_pretrained: str | None = None
     dct_aux_weight: float = 0.0
     decoder_kwargs: dict[str, Any] = field(default_factory=dict)
     local_image_size: int = 0
+    luma_image_size: int = 0
 
     def __post_init__(self):
         _non_empty_str(self.encoder_name, 'model.encoder_name')
@@ -82,10 +85,22 @@ class ModelConfig(ConfigSection):
             raise ValueError('model.use_forensics must be boolean')
         for name in ('aux_weight', 'dct_aux_weight'):
             _nonnegative(getattr(self, name), f'model.{name}')
+        if self.forensic_mode not in {'maps', 'jpeg'}:
+            raise ValueError('forensic_mode must be maps or jpeg')
+        if self.forensic_mode == 'jpeg' and not self.use_forensics:
+            raise ValueError('forensic_mode=jpeg requires use_forensics')
+        if self.jpeg_pretrained is not None:
+            _non_empty_str(self.jpeg_pretrained, 'model.jpeg_pretrained')
+            if self.forensic_mode != 'jpeg':
+                raise ValueError('jpeg_pretrained requires forensic_mode=jpeg')
         if self.dct_aux_weight and not self.use_forensics:
             raise ValueError('DCT auxiliary head requires use_forensics')
         if type(self.local_image_size) is not int or self.local_image_size < 0 or self.local_image_size % 32:
             raise ValueError('model.local_image_size must be 0 or a positive multiple of 32')
+        if type(self.luma_image_size) is not int or self.luma_image_size < 0 or self.luma_image_size % 32:
+            raise ValueError('model.luma_image_size must be 0 or a positive multiple of 32')
+        if self.luma_image_size and self.local_image_size:
+            raise ValueError('luma_image_size and local_image_size are mutually exclusive')
         _mapping(self.decoder_kwargs, 'model.decoder_kwargs')
         reserved = {'encoder_channels', 'encoder_strides', 'norm', 'use_aux'}
         if reserved.intersection(self.decoder_kwargs):
@@ -93,6 +108,9 @@ class ModelConfig(ConfigSection):
         if self.local_image_size and any(self.decoder_kwargs.get(k, 0) for k in
                                         ('rgb_refinement_channels', 'output_refinement_channels')):
             raise ValueError('local_image_size must not be combined with decoder refinement experiments')
+        if self.luma_image_size and any(self.decoder_kwargs.get(k, 0) for k in
+                                       ('rgb_refinement_channels', 'output_refinement_channels')):
+            raise ValueError('luma_image_size must not be combined with decoder refinement experiments')
 
 
 @dataclass(frozen=True)
@@ -227,6 +245,10 @@ class ExperimentConfig:
             raise ValueError('train.full_train_epochs requires matching final_full_frame_epochs')
         if self.model.local_image_size and self.dataset.resize_mode != 'stretch':
             raise ValueError('local_image_size currently requires stretch geometry')
+        if self.model.forensic_mode == 'jpeg' and self.dataset.resize_mode != 'stretch':
+            raise ValueError('forensic_mode=jpeg requires stretch geometry')
+        if self.model.luma_image_size and self.dataset.resize_mode != 'stretch':
+            raise ValueError('luma_image_size currently requires stretch geometry')
 
     def to_dict(self):
         result = {'pipeline_version': PIPELINE_VERSION, 'paths': self.paths.to_dict(), 'seed': self.seed}

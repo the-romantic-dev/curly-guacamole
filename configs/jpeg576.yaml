@@ -1,0 +1,5 @@
+extends: dct576.yaml
+paths:
+  run_name: jpeg576
+model:
+  forensic_mode: jpeg

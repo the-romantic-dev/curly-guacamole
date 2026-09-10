@@ -234,7 +234,8 @@ def test_local_config_rejects_letterbox():
         ExperimentConfig.from_dict(raw)
 
 
-def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path, monkeypatch):
+@pytest.mark.parametrize('branch', ['local', 'luma'])
+def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path, monkeypatch, branch):
     from PIL import Image
 
     from src.eval.checkpoints import CheckpointEvaluator
@@ -243,8 +244,9 @@ def test_saved_local_model_submission_matches_checkpoint_evaluation(tmp_path, mo
     from src.training.runs import Run
 
     torch.set_num_threads(1)
-    base = load_experiment_config('configs/local.yaml')
-    config = replace(base, model=local_config(128),
+    base = load_experiment_config(f'configs/{branch}.yaml')
+    branch_config = local_config(128) if branch == 'local' else ModelConfig(luma_image_size=128)
+    config = replace(base, model=branch_config,
                      paths=replace(base.paths, data_path=tmp_path / 'data'),
                      dataset=replace(base.dataset, image_size=64),
                      train=replace(base.train, device='cpu', amp='off', batch_size=2, workers=0))

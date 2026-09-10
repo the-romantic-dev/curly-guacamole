@@ -21,6 +21,7 @@ from src.training.builders import AmpContext, DataLoaderThreadLimits, build_mode
 from src.training.metric import AICAccumulator
 from src.training.runs import Run
 from src.training.validation import DeviceHistogramAccumulator
+from src.training.transfer import BatchTransfer
 
 
 def historical_originals(metadata, validation, originals, pairs):
@@ -81,7 +82,9 @@ class CheckpointEvaluator:
                               self.config.image_size, self.config.seed, mode='val', original_targets=True,
                               resize_mode=self.config.resize_mode,
                               local_image_size=self.config.model.local_image_size,
-                              use_forensics=self.config.model.use_forensics)
+                              luma_image_size=self.config.model.luma_image_size,
+                              use_forensics=self.config.model.use_forensics,
+                              forensic_mode=self.config.model.forensic_mode)
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.workers,
                             collate_fn=ValidationCollator(), worker_init_fn=DataLoaderThreadLimits.apply,
                             pin_memory=self.device.type == 'cuda')
@@ -95,6 +98,10 @@ class CheckpointEvaluator:
                         kwargs = {'valid_mask': batch['valid_mask'].to(self.device)} if 'valid_mask' in batch else {}
                         if 'local_input' in batch:
                             kwargs['local_input'] = batch['local_input'].to(self.device, non_blocking=True)
+                        if 'jpeg' in batch:
+                            kwargs['jpeg'] = BatchTransfer.move_jpeg(batch['jpeg'], self.device)
+                        if 'native_rgb' in batch:
+                            kwargs['native_rgb'] = [rgb.to(self.device, non_blocking=True) for rgb in batch['native_rgb']]
                         out = model(batch['image'].to(self.device, memory_format=torch.channels_last),
                                     batch['fmap'].to(self.device) if 'fmap' in batch else None, **kwargs)
                     probs, cls = out['logits'].float().sigmoid(), out['cls_logits'].float().sigmoid().flatten()

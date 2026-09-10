@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import torch
+from src.training.transfer import BatchTransfer
 
 from src.data.letterbox import Letterbox
 from src.losses import LossMeter, SegmentationLoss
@@ -54,8 +55,12 @@ def validate(
 
         with amp.autocast():
             kwargs = {"valid_mask": batch["valid_mask"].to(device)} if "valid_mask" in batch else {}
+            if 'jpeg' in batch:
+                kwargs['jpeg'] = BatchTransfer.move_jpeg(batch['jpeg'], device)
             if 'local_input' in batch:
                 kwargs['local_input'] = batch['local_input'].to(device, non_blocking=True)
+            if 'native_rgb' in batch:
+                kwargs['native_rgb'] = [rgb.to(device, non_blocking=True) for rgb in batch['native_rgb']]
             out = model(images, fmap, **kwargs)
 
         # Comparable main-head loss on the network grid; AIC can use original GT.

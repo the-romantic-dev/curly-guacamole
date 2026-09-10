@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 from src.config import ModelConfig, PathsConfig, PIPELINE_VERSION
 from src.data.data_workspace import DataWorkspace
 from src.data.dataset import AIIJCDataset
+from src.data.collation import ValidationCollator
 from src.inference.predict import Prediction, Predictor, ThresholdConfig
 from src.progress import ConsoleProgress
 from src.training.builders import AmpContext, build_model
@@ -129,7 +130,9 @@ def create_submission(
     dataset = AIIJCDataset(workspace, test_rows, False, config.image_size, config.seed,
                            mode="test", resize_mode=config.resize_mode,
                            local_image_size=config.model.local_image_size,
-                           use_forensics=config.model.use_forensics)
+                           luma_image_size=config.model.luma_image_size,
+                           use_forensics=config.model.use_forensics,
+                           forensic_mode=config.model.forensic_mode)
     inference_device = torch.device(device or config.device)
     ConsoleProgress.info(
         f"Submission: изображений {len(test_rows)}, устройство {inference_device}, "
@@ -144,7 +147,8 @@ def create_submission(
     ConsoleProgress.info(f"Submission: создание модели и применение весов {weights}")
     model = build_model(config.model, pretrained=False)
     model.load_state_dict(checkpoint[weights])
-    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.workers)
+    loader = DataLoader(dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.workers,
+                        collate_fn=ValidationCollator())
     ConsoleProgress.info(f"Submission: перенос модели на {inference_device}")
     predictor = Predictor(model, thresholds, amp)
     batches = ConsoleProgress.iterate(loader, "Submission: предсказание и сохранение PNG (батчи)")

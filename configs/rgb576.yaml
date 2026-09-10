@@ -1,0 +1,5 @@
+extends: dct576.yaml
+paths:
+  run_name: rgb576
+model:
+  use_forensics: false

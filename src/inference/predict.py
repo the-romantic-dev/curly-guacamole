@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+from src.training.transfer import BatchTransfer
 
 from src.data.letterbox import Letterbox
 from src.training.builders import AmpContext
@@ -42,8 +43,12 @@ class Predictor:
             with torch.inference_mode(), self.amp.autocast():
                 kwargs = ({"valid_mask": batch["valid_mask"].to(self.amp.device)}
                           if "valid_mask" in batch else {})
+                if 'jpeg' in batch:
+                    kwargs['jpeg'] = BatchTransfer.move_jpeg(batch['jpeg'], self.amp.device)
                 if 'local_input' in batch:
                     kwargs['local_input'] = batch['local_input'].to(self.amp.device, non_blocking=True)
+                if 'native_rgb' in batch:
+                    kwargs['native_rgb'] = [rgb.to(self.amp.device, non_blocking=True) for rgb in batch['native_rgb']]
                 output = self.model(
                     batch["image"].to(self.amp.device),
                     batch["fmap"].to(self.amp.device) if "fmap" in batch else None,

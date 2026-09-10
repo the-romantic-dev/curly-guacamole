@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import cv2
@@ -11,6 +12,7 @@ import torch
 from threadpoolctl import threadpool_limits
 from torch.utils.data import DataLoader, WeightedRandomSampler
 
+import global_config
 from src.config import ExperimentConfig, ModelConfig, TrainConfig
 from src.data.augmentation.pipeline import AugmentationPipeline
 from src.data.collation import ValidationCollator
@@ -59,17 +61,25 @@ class AmpContext:
 def build_model(config: ModelConfig, *, pretrained: bool = True) -> Segmenter:
     from src.modules.segmenter import Segmenter
 
-    return Segmenter(
+    model = Segmenter(
         encoder_name=config.encoder_name,
         forensic_channels=config.forensic_channels,
         norm=config.norm,
         aux_weight=config.aux_weight,
         use_forensics=config.use_forensics,
+        forensic_mode=config.forensic_mode,
         dct_aux_weight=config.dct_aux_weight,
         pretrained=pretrained,
         decoder_kwargs=config.decoder_kwargs,
         local_image_size=config.local_image_size,
+        luma_image_size=config.luma_image_size,
     )
+    if pretrained and config.jpeg_pretrained is not None:
+        path = Path(config.jpeg_pretrained)
+        if not path.is_absolute():
+            path = global_config.PROJECT_ROOT / path
+        model.forensic_fusion.branch.artifact.load_pretrained(path)
+    return model
 
 
 def build_datasets(
@@ -91,9 +101,11 @@ def build_datasets(
         augmentations=augmentations,
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
+        forensic_mode=config.model.forensic_mode,
         mode="train",
         resize_mode=config.dataset.resize_mode,
         local_image_size=config.model.local_image_size,
+        luma_image_size=config.model.luma_image_size,
         local_dtype=local_dtype,
     )
 
@@ -106,10 +118,12 @@ def build_datasets(
         augmentations=None,
         fmap_channels=None,
         use_forensics=config.model.use_forensics,
+        forensic_mode=config.model.forensic_mode,
         mode="val",
         resize_mode=config.dataset.resize_mode,
         original_targets=True,
         local_image_size=config.model.local_image_size,
+        luma_image_size=config.model.luma_image_size,
         local_dtype=local_dtype,
     )
 
@@ -145,7 +159,9 @@ def build_loaders(
 ) -> tuple[DataLoader, DataLoader]:
     DataLoaderThreadLimits.apply()
     pin_memory = torch.device(config.device).type == "cuda"
-    local = getattr(train_ds, 'local_preprocessor', None) is not None
+    local = (getattr(train_ds, 'local_preprocessor', None) is not None
+             or bool(getattr(train_ds, 'luma_image_size', 0))
+             or getattr(train_ds, 'forensic_mode', 'maps') == 'jpeg')
     # Local views are 60 MiB each; avoid buffering two huge batches per worker.
     prefetch = 1 if local else 2
     sampler = build_sampler(config, train_ds)
@@ -155,6 +171,8 @@ def build_loaders(
         train_ds,
         batch_size=config.batch_size,
         sampler=sampler,
+        collate_fn=ValidationCollator() if (getattr(train_ds, 'luma_image_size', 0)
+                                           or getattr(train_ds, 'forensic_mode', 'maps') == 'jpeg') else None,
         drop_last=not bool(config.full_train_epochs),
         num_workers=config.workers,
         pin_memory=pin_memory,

@@ -5,8 +5,13 @@
 | Новый конфиг | Предшествующий рецепт / идея | Изменение |
 |---|---|---|
 | [baseline](../configs/baseline.yaml) | emcad_mixed_original_fixed_val_natural_q_light | Общие условия стали поведением pipeline |
+| [dct576](../configs/dct576.yaml) | baseline | RGB 576, текущая forensic-ветка |
+| [rgb576](../configs/rgb576.yaml) | dct576 | Forensic-ветка отключена |
+| [jpeg576](../configs/jpeg576.yaml) | dct576 | Native JPEG Artifact Module + компактная пирамида; [условия сравнения](jpeg_ablation.md) |
+| [jpeg576_pretrained](../configs/jpeg576_pretrained.yaml) | jpeg576 | Инициализация JPEG Artifact Module из `DCT_djpeg.pth`, с последующим дообучением |
 | [positive_dice](../configs/positive_dice.yaml) | baseline_positive_dice_mixed_original; последующий EMCAD positive-Dice | Dice только по позитивам, вес 1 |
 | [local](../configs/local.yaml) | emcad_local_1024_positive_dice_light | Локальная ветка 1024 поверх positive_dice |
+| [luma](../configs/luma.yaml) | Диагностика потери яркостных деталей при resize | GPU-экстрактор яркости 1024, 8/16/24 каналов, одно слияние после EMCAD; качество пока не измерено |
 | [stride4](../configs/stride4.yaml) | emcad_stride4_mixed_original | Refinement 144 каналов |
 | [stride2_rgb](../configs/stride2_rgb.yaml) | emcad_stride2_rgb_mixed_original | RGB refinement 32/24, batch 2 × accum 8 |
 | [dct_aux](../configs/dct_aux.yaml) | pvt_v2_b2_emcad_640_dct_aux_mixed_original | DCT auxiliary weight 0.2 |

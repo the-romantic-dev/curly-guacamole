@@ -8,6 +8,7 @@ import numpy as np
 from src.data.augmentation.base import AIIJCAugmentation, AugmentationStage, require_rng
 from src.data.data_sample import DataSample
 from src.forensic.dct import luma_qtable
+from src.forensic.jpeg_input import JPEGInput
 
 
 class RandomJPEGRecompression(AIIJCAugmentation):
@@ -19,8 +20,9 @@ class RandomJPEGRecompression(AIIJCAugmentation):
     def jpeg_recompression(
             self,
             image: np.ndarray,
-            rng: np.random.Generator | None
-    ) -> tuple[np.ndarray, np.ndarray | None]:
+            rng: np.random.Generator | None,
+            *, native=False,
+    ):
         """JPEG re-encode image and extract the resulting luminance qtable."""
         bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         quality = int(rng.integers(*self.quality_range))
@@ -30,12 +32,17 @@ class RandomJPEGRecompression(AIIJCAugmentation):
             [cv2.IMWRITE_JPEG_QUALITY, quality],
         )
         if not ok:
+            if native:
+                raise ValueError('JPEG recompression failed')
             return image, None
 
         jpeg_bytes = buffer.tobytes()
         decoded = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
         decoded = cv2.cvtColor(decoded, cv2.COLOR_BGR2RGB)
 
+        if native:
+            jpeg = JPEGInput.read(jpeg_bytes)
+            return decoded, jpeg.qtable, jpeg
         return decoded, luma_qtable(jpeg_bytes)
 
     def apply(self, sample: DataSample, rng: np.random.Generator | None = None) -> DataSample:
@@ -46,5 +53,8 @@ class RandomJPEGRecompression(AIIJCAugmentation):
         if rng.random() >= self.probability:
             return sample
 
+        if sample.jpeg is not None:
+            image, qtable, jpeg = self.jpeg_recompression(sample.image, rng, native=True)
+            return replace(sample, image=image, qtable=qtable, jpeg=jpeg)
         image, qtable = self.jpeg_recompression(sample.image, rng)
         return replace(sample, image=image, qtable=qtable)

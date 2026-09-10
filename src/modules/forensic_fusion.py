@@ -3,6 +3,7 @@ from torch import nn
 from src.forensic.dct.constants import CHANNEL_COUNT
 from src.modules.forensic_branch import ForensicBranch
 from src.modules.gated_fuse import GatedFuse
+from src.modules.jpeg_branch import JPEGBranch
 
 
 class ForensicFusion(nn.Module):
@@ -10,7 +11,7 @@ class ForensicFusion(nn.Module):
 
     FUSION_STRIDES = (8, 16, 32)
 
-    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False):
+    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False, forensic_mode='maps'):
         super().__init__()
 
         if len(encoder_strides) != len(encoder_channels):
@@ -30,8 +31,9 @@ class ForensicFusion(nn.Module):
             raise ValueError(f"encoder is missing fusion strides: {missing_strides}")
 
         self.encoder_strides = encoder_strides
+        self.forensic_mode = forensic_mode
 
-        self.branch = ForensicBranch(
+        self.branch = JPEGBranch(forensic_channels) if forensic_mode == 'jpeg' else ForensicBranch(
             in_ch=CHANNEL_COUNT,
             channels=forensic_channels,
         )
@@ -54,8 +56,12 @@ class ForensicFusion(nn.Module):
             )
         }
 
-    def forward(self, encoder_features, forensic_map, *, return_aux=False):
-        forensic_features = self.branch(forensic_map)
+    def forward(self, encoder_features, forensic_map, *, return_aux=False, jpeg=None):
+        if self.forensic_mode == 'jpeg':
+            sizes = {s: encoder_features[self.encoder_strides.index(s)].shape[-2:] for s in self.FUSION_STRIDES}
+            forensic_features = self.branch(jpeg, sizes)
+        else:
+            forensic_features = self.branch(forensic_map)
 
         for stride in self.FUSION_STRIDES:
             index = self.encoder_strides.index(stride)

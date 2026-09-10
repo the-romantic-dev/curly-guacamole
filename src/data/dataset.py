@@ -17,6 +17,7 @@ from src.data.sample_io import SampleIO
 from src.data.local_preprocess import LocalPreprocessor
 from src.data.profiling import SampleTimer
 from src.forensic.dct import forensic_maps, luma_qtable
+from src.forensic.jpeg_input import JPEGInput
 
 
 class AIIJCDataset(Dataset):
@@ -41,7 +42,9 @@ class AIIJCDataset(Dataset):
             original_targets: bool | None = None,
             resize_mode: str = "stretch",
             use_forensics: bool = True,
+            forensic_mode: str = 'maps',
             local_image_size: int = 0,
+            luma_image_size: int = 0,
             local_dtype: torch.dtype = torch.float32,
     ):
         super().__init__()
@@ -50,9 +53,19 @@ class AIIJCDataset(Dataset):
         self.train = self.mode == "train"
         self.has_targets = self.mode in {"train", "val"}
         self.use_forensics = use_forensics
+        if forensic_mode not in {'maps', 'jpeg'}:
+            raise ValueError('unknown forensic_mode')
+        self.forensic_mode = forensic_mode
+        if forensic_mode == 'jpeg':
+            if not use_forensics or resize_mode != 'stretch':
+                raise ValueError('jpeg mode requires forensics and stretch geometry')
+            JPEGInput.prepare_decoder()
         if local_image_size and resize_mode != 'stretch':
             raise ValueError('local_image_size currently requires stretch geometry')
         self.local_preprocessor = LocalPreprocessor(local_image_size) if local_image_size else None
+        if luma_image_size and (resize_mode != 'stretch' or local_image_size):
+            raise ValueError('luma_image_size requires stretch geometry and no local_image_size')
+        self.luma_image_size = luma_image_size
         self.local_dtype = local_dtype
         self.profile_data = False
         self.image_size = image_size
@@ -92,13 +105,15 @@ class AIIJCDataset(Dataset):
         mask = self.load_mask(row, original_size) if self.has_targets else None
         if timer:
             timer.mark('read_mask')
-        qtable = luma_qtable(image_path) if self.use_forensics else None
+        jpeg = JPEGInput.read(image_path) if self.forensic_mode == 'jpeg' else None
+        qtable = jpeg.qtable if jpeg is not None else (luma_qtable(image_path) if self.use_forensics else None)
         if timer:
             timer.mark('qtable')
         sample = DataSample(
             image=image,
             mask=mask,
             qtable=qtable,
+            jpeg=jpeg,
         )
         del mask, qtable
         rng = self._make_rng(index)
@@ -112,7 +127,7 @@ class AIIJCDataset(Dataset):
         sample = self._augment(AugmentationStage.BEFORE_FORENSICS, sample, rng)
         if timer:
             timer.mark('jpeg')
-        if self.use_forensics:
+        if self.use_forensics and self.forensic_mode == 'maps':
             fmap = forensic_maps(sample.image, sample.qtable)
         else:
             # Keep the same crop/resize geometry without extracting DCT features.
@@ -125,14 +140,18 @@ class AIIJCDataset(Dataset):
         if timer:
             timer.mark('geometry')
         local_input = None
-        if self.local_preprocessor is not None:
+        native_rgb = None
+        if self.local_preprocessor is not None or self.luma_image_size:
             # One appearance draw on native geometry shared by both views.
             sample = self._augment(AugmentationStage.FINAL, sample, rng)
             if timer:
                 timer.mark('photometric')
             # Match the first local convolution's AMP cast before IPC/H2D.
             # Native residual extraction and resize always remain float32.
-            local_input = self.local_preprocessor(sample.image, dtype=self.local_dtype)
+            if self.local_preprocessor is not None:
+                local_input = self.local_preprocessor(sample.image, dtype=self.local_dtype)
+            else:
+                native_rgb = torch.from_numpy(np.ascontiguousarray(sample.image.transpose(2, 0, 1)))
             if timer:
                 timer.mark('local_features')
             # Conversion is now included in local_features; local_cast stays zero.
@@ -147,9 +166,13 @@ class AIIJCDataset(Dataset):
             if timer:
                 timer.mark('photometric')
         output = self.preprocessor.to_output(sample)
+        if sample.jpeg is not None:
+            output['jpeg'] = sample.jpeg.tensors()
         if local_input is not None:
             output['local_input'] = local_input
-        if not self.use_forensics:
+        if native_rgb is not None:
+            output['native_rgb'] = native_rgb
+        if not self.use_forensics or self.forensic_mode == 'jpeg':
             output.pop("fmap")
         if original_mask is not None:
             if original_mask.shape != original_size:

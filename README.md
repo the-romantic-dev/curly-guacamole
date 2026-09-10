@@ -15,14 +15,19 @@
 | Конфиг | Отличие от baseline |
 |---|---|
 | [baseline](configs/baseline.yaml) | Базовая модель, BCE + Dice на всех примерах |
+| [dct576](configs/dct576.yaml) | Baseline с текущей forensic-веткой, RGB 576 |
+| [rgb576](configs/rgb576.yaml) | Та же модель без forensic-ветки, RGB 576 |
+| [jpeg576](configs/jpeg576.yaml) | JPEG Artifact Module и компактная пирамида вместо текущей ветки, RGB 576; [подробности](docs/jpeg_ablation.md) |
+| [jpeg576_pretrained](configs/jpeg576_pretrained.yaml) | Тот же `jpeg576`, JPEG Artifact Module стартует с весов `DCT_djpeg.pth` |
 | [positive_dice](configs/positive_dice.yaml) | Dice только на позитивных; BCE по всем |
 | [positive_dice_full_train](configs/positive_dice_full_train.yaml) | 4 sampled-эпохи + 1 полный full-frame проход; warmup, постоянный LR, затем cosine до 10% |
 | [local](configs/local.yaml) | Positive Dice + локальная RGB/residual-ветка 1024 |
+| [luma](configs/luma.yaml) | Positive Dice + компактная яркостная ветка 1024 на GPU; [устройство и проверки](docs/luma_branch.md) |
 | [stride4](configs/stride4.yaml) | Spatial refinement 144 каналов после EMCAD |
 | [stride2_rgb](configs/stride2_rgb.yaml) | RGB refinement stride 2, batch 2 × accumulation 8 |
 | [dct_aux](configs/dct_aux.yaml) | Дополнительная DCT-голова с весом 0.2 |
 
-Общая база — 6 эпох × 24 000 показов, batch 4 × accumulation 4, seed 42, EMA, BF16. `local` наследует `positive_dice`; остальные варианты — `baseline`. Гиперпараметры можно менять, общие исправления отключить нельзя.
+Общая база — 6 эпох × 24 000 показов, batch 4 × accumulation 4, seed 42, EMA, BF16. `local`, `luma` и `positive_dice_full_train` наследуют `positive_dice`; остальные варианты — `baseline`. Гиперпараметры можно менять, общие исправления отключить нельзя.
 
 Все параметры явно перечислены в `configs/baseline.yaml`. Остальные рецепты наследуют его и задают только отличия. Загрузчик также поддерживает минимальный конфиг со встроенными defaults:
 

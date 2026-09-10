@@ -65,4 +65,6 @@ class RandomRotateFlip(AIIJCAugmentation):
             else None
         )
 
-        return replace(sample, image=image, mask=mask, fmap=fmap)
+        jpeg = (sample.jpeg.transform(rotations, flip_horizontal, flip_vertical)
+                if sample.jpeg is not None else None)
+        return replace(sample, image=image, mask=mask, fmap=fmap, jpeg=jpeg)
