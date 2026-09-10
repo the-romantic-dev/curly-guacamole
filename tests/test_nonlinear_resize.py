@@ -6,6 +6,21 @@ from src.training.builders import build_model
 import torch
 
 
+def test_nonlinear_initialization_matches_bilinear_and_both_layers_learn():
+    from src.modules.strided_resize import StridedResize
+    from torch.nn import functional as F
+
+    module = StridedResize('nonlinear')
+    image = torch.rand(2, 3, 48, 64)
+    expected = (F.interpolate(image, scale_factor=.5, mode='bilinear', align_corners=False)
+                - module.mean) / module.std
+    torch.testing.assert_close(module(image), expected, atol=1e-6, rtol=1e-5)
+    module(image).square().mean().backward()
+    for layer in (module.conv[0], module.conv[2]):
+        assert torch.isfinite(layer.weight.grad).all()
+        assert (layer.weight.grad.abs().sum(dim=(1, 2, 3)) > 0).all()
+
+
 def test_nonlinear_recipe_gradients_and_reload():
     from src.inference.submission import InferenceConfig
     torch.set_num_threads(1)
