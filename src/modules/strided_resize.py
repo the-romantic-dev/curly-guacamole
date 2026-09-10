@@ -3,6 +3,7 @@
 import torch
 from torch import nn
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from src.modules.residual_resize import ResidualImageResize
 
 
 class StridedResize(nn.Module):
@@ -16,7 +17,7 @@ class StridedResize(nn.Module):
 
     def __init__(self, variant='linear'):
         super().__init__()
-        if variant not in {'linear', 'nonlinear'}:
+        if variant not in {'linear', 'nonlinear', 'residual_paper', 'residual_compact'}:
             raise ValueError('unknown resize_variant')
         self.conv = nn.Conv2d(3, 3, 3, stride=2, padding=1)
         with torch.no_grad():
@@ -31,6 +32,8 @@ class StridedResize(nn.Module):
                 nn.Conv2d(16, 3, 3, stride=2, padding=1),
             )
             self._initialize_nonlinear()
+        elif variant in {'residual_paper', 'residual_compact'}:
+            self.conv = ResidualImageResize(compact=variant == 'residual_compact')
         self.register_buffer('mean', torch.tensor(IMAGENET_DEFAULT_MEAN).view(1, 3, 1, 1))
         self.register_buffer('std', torch.tensor(IMAGENET_DEFAULT_STD).view(1, 3, 1, 1))
 

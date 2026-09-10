@@ -81,7 +81,7 @@ class ModelConfig(ConfigSection):
         _non_empty_str(self.encoder_name, 'model.encoder_name')
         if type(self.strided_resize) is not bool:
             raise ValueError('model.strided_resize must be boolean')
-        if self.resize_variant not in {'linear', 'nonlinear'}:
+        if self.resize_variant not in {'linear', 'nonlinear', 'residual_paper', 'residual_compact'}:
             raise ValueError('unknown model.resize_variant')
         if self.resize_variant != 'linear' and not self.strided_resize:
             raise ValueError('resize_variant requires strided_resize')

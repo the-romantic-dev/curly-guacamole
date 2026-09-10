@@ -11,6 +11,8 @@
 | [rgb576_strided](../configs/rgb576_strided.yaml) | rgb576 | RGB1152 → обучаемая Conv3×3 stride 2 → RGB576 → ImageNet-нормализация; [описание](strided_resize.md) |
 | [rgb576_strided_gn](../configs/rgb576_strided_gn.yaml) | rgb576_strided | GroupNorm вместо BatchNorm в EMCAD; отдельное обучение |
 | [rgb576_strided_mlp](../configs/rgb576_strided_mlp.yaml) | rgb576_strided | Ресайзер Conv3×3 3→16 → GELU → Conv3×3 16→3 stride 2; BatchNorm |
+| [rgb576_residual_paper](../configs/rgb576_residual_paper.yaml) | rgb576_strided | Bilinear RGB + случайно инициализированная поправка: архитектура статьи n=16, r=1 |
+| [rgb576_residual_compact](../configs/rgb576_residual_compact.yaml) | rgb576_strided | Bilinear RGB + компактная поправка: 8 каналов, ядра 3×3, без BN внутри ресайзера |
 | [jpeg576](../configs/jpeg576.yaml) | dct576 | Native JPEG Artifact Module + компактная пирамида; [условия сравнения](jpeg_ablation.md) |
 | [jpeg576_pretrained](../configs/jpeg576_pretrained.yaml) | jpeg576 | Инициализация JPEG Artifact Module из `DCT_djpeg.pth`, с последующим дообучением |
 | [positive_dice](../configs/positive_dice.yaml) | baseline_positive_dice_mixed_original; последующий EMCAD positive-Dice | Dice только по позитивам, вес 1 |

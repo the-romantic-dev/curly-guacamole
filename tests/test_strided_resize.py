@@ -70,7 +70,8 @@ def test_model_output_optimizer_and_checkpoint():
         torch.testing.assert_close(model(image)['logits'], restored(image)['logits'])
 
 
-def test_training_validation_prediction_and_dataset(tmp_path):
+@pytest.mark.parametrize('recipe', ['rgb576_strided', 'rgb576_residual_paper', 'rgb576_residual_compact'])
+def test_training_validation_prediction_and_dataset(tmp_path, recipe):
     import cv2
     import pandas as pd
     from src.data.data_workspace import DataWorkspace
@@ -82,7 +83,7 @@ def test_training_validation_prediction_and_dataset(tmp_path):
     from src.inference.predict import Predictor, ThresholdConfig
     from src.training.metric import score_masks
 
-    base = load_experiment_config('configs/rgb576_strided.yaml')
+    base = load_experiment_config(f'configs/{recipe}.yaml')
     config = replace(base, dataset=replace(base.dataset, image_size=64),
                      train=replace(base.train, device='cpu', amp='off', workers=0, accum_steps=1),
                      eval=replace(base.eval, mask_thresholds=(.5,), cls_thresholds=(0.,), min_areas=(0.,)))
