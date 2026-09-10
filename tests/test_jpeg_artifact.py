@@ -46,6 +46,48 @@ def test_invalid_jpeg_raises_without_terminating_process():
         JPEGInput.read(b'not a JPEG')
 
 
+def test_invalid_jpeg_error_identifies_source_file(tmp_path):
+    path = tmp_path / 'broken.jpg'
+    path.write_bytes(b'not a JPEG')
+    with pytest.raises(ValueError) as error:
+        JPEGInput.read(path)
+    assert str(path) in str(error.value)
+    assert 'Not a JPEG' in str(error.value)
+
+
+def test_png_named_jpeg_bypasses_forensics_and_recompression_restores_it(tmp_path):
+    from src.data.augmentation.transforms.random_jpeg_recompression import RandomJPEGRecompression
+    from src.data.data_sample import DataSample
+    from src.modules.forensic_fusion import ForensicFusion
+
+    path = tmp_path / 'actually_png.jpg'
+    pixels = np.full((64, 80, 3), 128, np.uint8)
+    Image.fromarray(pixels).save(path, format='PNG')
+    native = JPEGInput.read(path)
+    assert not native.available
+    fusion = ForensicFusion((4, 8, 16, 32), (4, 8, 16, 32), (8, 16, 32), forensic_mode='jpeg').train()
+    for block in fusion.fusion_blocks.values():
+        block.channel_gate.data.fill_(1)
+    features = [torch.randn(1, c, 64//s, 64//s, requires_grad=True)
+                for s, c in zip((4, 8, 16, 32), (4, 8, 16, 32), strict=True)]
+    before = [x.clone() for x in features]
+    out = fusion(features, None, jpeg=[native.tensors()])
+    for original, actual in zip(before, out, strict=True):
+        torch.testing.assert_close(actual, original)
+    sum(x.sum() for x in out).backward()
+    sample = DataSample(image=pixels, jpeg=native)
+    result = RandomJPEGRecompression((70, 71), 1).apply(sample, np.random.default_rng(1))
+    assert result.jpeg.available
+    mixed = [torch.randn(2, c, 64//s, 64//s, requires_grad=True)
+             for s, c in zip((4, 8, 16, 32), (4, 8, 16, 32), strict=True)]
+    fused = fusion(mixed, None, jpeg=[native.tensors(), result.jpeg.tensors()])
+    for original, actual in zip(mixed, fused, strict=True):
+        torch.testing.assert_close(actual[0], original[0])
+    assert not torch.equal(fused[1][1], mixed[1][1])
+    sum(x.square().mean() for x in fused).backward()
+    assert fusion.branch.artifact.dc_layer0_dil[0].weight.grad.abs().sum() > 0
+
+
 def test_large_jpeg_does_not_require_temporary_backing_files():
     native = JPEGInput.read(jpeg_bytes((1024, 1024)))
     assert native.bins.shape == (1024, 1024)

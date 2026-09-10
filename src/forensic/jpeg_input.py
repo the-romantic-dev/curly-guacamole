@@ -46,6 +46,7 @@ class JPEGInput:
     geometry: tuple[int, int, int, int, int, int, int]
     orientation: int = 1
     source_size: tuple[int, int] | None = None
+    available: bool = True
 
     @staticmethod
     def prepare_decoder():
@@ -54,10 +55,19 @@ class JPEGInput:
     @classmethod
     def read(cls, source):
         data = source if isinstance(source, bytes) else Path(source).read_bytes()
+        if data.startswith(b'\x89PNG\r\n\x1a\n'):
+            # Some originals are PNG files named .jpg. They have no JPEG DCT.
+            with Image.open(io.BytesIO(data)) as image:
+                w, h = image.size
+                image.verify()
+            return cls(np.empty((0, 0), np.uint8), np.ones((8, 8), np.float32),
+                       (0, 0, h, w, 0, 0, 0), source_size=(h, w), available=False)
         ffi, decoder = _decoder()
         result = ffi.new('jpeg_result *')
         if not decoder.read_jpeg_bins(data, len(data), result):
-            raise ValueError('Cannot read JPEG: ' + ffi.string(result.error).decode(errors='replace'))
+            origin = '<in-memory JPEG>' if isinstance(source, bytes) else str(source)
+            reason = ffi.string(result.error).decode(errors='replace')
+            raise ValueError(f'Cannot read JPEG [{origin}]: {reason}')
         try:
             bins = np.frombuffer(ffi.buffer(result.bins, result.rows * result.cols), np.uint8).copy()
             bins = bins.reshape(result.rows, result.cols)
@@ -80,4 +90,5 @@ class JPEGInput:
 
     def tensors(self):
         return {'bins': torch.from_numpy(self.bins), 'qtable': torch.from_numpy(self.qtable),
-                'geometry': self.geometry, 'orientation': self.orientation, 'source_size': self.source_size}
+                'geometry': self.geometry, 'orientation': self.orientation, 'source_size': self.source_size,
+                'available': self.available}

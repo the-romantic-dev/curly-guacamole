@@ -58,6 +58,23 @@ class ForensicFusion(nn.Module):
 
     def forward(self, encoder_features, forensic_map, *, return_aux=False, jpeg=None):
         if self.forensic_mode == 'jpeg':
+            available = [i for i, sample in enumerate(jpeg) if sample.get('available', True)]
+            if not available:
+                return (encoder_features, None) if return_aux else encoder_features
+            if len(available) != len(jpeg):
+                # Exclude PNG samples from the branch and fusion BatchNorm too.
+                subset = [feature[available] for feature in encoder_features]
+                fused, aux = self.forward(subset, None, return_aux=True, jpeg=[jpeg[i] for i in available])
+                result = [feature.clone() for feature in encoder_features]
+                for original, updated in zip(result, fused, strict=True):
+                    original[available] = updated
+                if not return_aux:
+                    return result
+                if aux is not None:
+                    full_aux = aux.new_zeros((len(jpeg), *aux.shape[1:]))
+                    full_aux[available] = aux
+                    aux = full_aux
+                return result, aux
             sizes = {s: encoder_features[self.encoder_strides.index(s)].shape[-2:] for s in self.FUSION_STRIDES}
             forensic_features = self.branch(jpeg, sizes)
         else:
