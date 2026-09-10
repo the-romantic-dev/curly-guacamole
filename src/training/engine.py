@@ -69,8 +69,7 @@ class ExperimentRunner:
         train_df, val_df = self._split_data()
         ConsoleProgress.info(f"Разбиение готово: train={len(train_df)}, val={len(val_df)}; создание датасетов и аугментаций")
         train_ds, val_ds = build_datasets(cfg, self.data_workspace, train_df, val_df)
-        ConsoleProgress.info(f"Создание модели {cfg.model.encoder_name}, загрузка pretrained-весов и перенос на {self.device}")
-        model = configure_memory_format(build_model(cfg.model, pretrained=not cfg.train.resume).to(self.device))
+        model = self._build_training_model()
         ConsoleProgress.info("Модель готова; подсчёт GFLOPS")
         gflops = count_gflops(model, cfg.dataset.image_size,
                              use_valid_mask=cfg.dataset.resize_mode == "letterbox",
@@ -204,6 +203,15 @@ class ExperimentRunner:
             del model, ema, optimizer, val_loader, train_loader, scaler
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    def _build_training_model(self):
+        cfg = self.config
+        checkpoint = cfg.paths.runs_path / cfg.paths.run_name / 'ckpt' / 'last.pt'
+        resume_available = cfg.train.resume and checkpoint.is_file()
+        initialization = f'из checkpoint {checkpoint}' if resume_available else 'из pretrained-весов'
+        ConsoleProgress.info(f'Создание модели {cfg.model.encoder_name}: инициализация {initialization}, '
+                             f'перенос на {self.device}')
+        return configure_memory_format(build_model(cfg.model, pretrained=not resume_available).to(self.device))
 
     def _check_resume_protocol(self) -> None:
         cfg = self.config
