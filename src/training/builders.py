@@ -82,6 +82,19 @@ def build_model(config: ModelConfig, *, pretrained: bool = True) -> Segmenter:
     return model
 
 
+def configure_memory_format(model):
+    """Use NHWC for fixed RGB shapes, NCHW for the variable-size JPEG stream.
+
+    On RTX 3070, new native shapes in the NHWC JPEG stream incurred seconds
+    of cold convolution overhead. NCHW avoids this without resampling inputs.
+    Apply before constructing the optimizer or EMA.
+    """
+    model.to(memory_format=torch.channels_last)
+    if getattr(model, 'forensic_mode', 'maps') == 'jpeg':
+        model.forensic_fusion.branch.to(memory_format=torch.contiguous_format)
+    return model
+
+
 def build_datasets(
     config: ExperimentConfig,
     data_workspace: DataWorkspace,

@@ -9,6 +9,20 @@ from src.forensic.jpeg_input import JPEGInput
 from src.modules.jpeg_branch import JPEGArtifactModule
 
 
+def test_training_layout_keeps_variable_jpeg_convolutions_contiguous():
+    from src.config import ModelConfig
+    from src.training.builders import build_model, configure_memory_format
+
+    model = configure_memory_format(build_model(ModelConfig(forensic_mode='jpeg'), pretrained=False))
+    branch = model.forensic_fusion.branch
+    for layer in branch.modules():
+        if isinstance(layer, torch.nn.Conv2d):
+            assert layer.weight.is_contiguous()
+    assert any(isinstance(layer, torch.nn.Conv2d) and layer.weight.shape[-1] > 1
+               and layer.weight.is_contiguous(memory_format=torch.channels_last)
+               for name, layer in model.named_modules() if not name.startswith('forensic_fusion.branch'))
+
+
 def jpeg_bytes(shape=(19, 27), value=128, progressive=False):
     stream = io.BytesIO()
     Image.fromarray(np.full((*shape, 3), value, np.uint8)).save(

@@ -26,6 +26,7 @@ from src.training.builders import (
     build_model,
     build_optimizer,
     build_scheduler,
+    configure_memory_format,
 )
 from src.training.metric import AICResult
 from src.training.runs import Run
@@ -69,7 +70,7 @@ class ExperimentRunner:
         ConsoleProgress.info(f"Разбиение готово: train={len(train_df)}, val={len(val_df)}; создание датасетов и аугментаций")
         train_ds, val_ds = build_datasets(cfg, self.data_workspace, train_df, val_df)
         ConsoleProgress.info(f"Создание модели {cfg.model.encoder_name}, загрузка pretrained-весов и перенос на {self.device}")
-        model = build_model(cfg.model, pretrained=not cfg.train.resume).to(self.device, memory_format=torch.channels_last)
+        model = configure_memory_format(build_model(cfg.model, pretrained=not cfg.train.resume).to(self.device))
         ConsoleProgress.info("Модель готова; подсчёт GFLOPS")
         gflops = count_gflops(model, cfg.dataset.image_size,
                              use_valid_mask=cfg.dataset.resize_mode == "letterbox",

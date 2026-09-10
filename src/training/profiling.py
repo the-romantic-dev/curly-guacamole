@@ -92,7 +92,7 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized', profile_da
     from src.data.profiling import WorkerProfileSummary
     from src.training.base import set_random_seed
     from src.training.builders import (build_datasets, build_loaders, build_model,
-                                       build_optimizer, build_scheduler, build_ema)
+                                       build_optimizer, build_scheduler, build_ema, configure_memory_format)
     from src.training.engine import ExperimentRunner, train_one_epoch, _move_batch_to_device
 
     if batches <= 0 or warmup < 0:
@@ -131,7 +131,7 @@ def benchmark(config, *, batches=32, warmup=8, transport='optimized', profile_da
             source = BenchmarkBatches(loader, total, worker_profile=worker_profile, warmup=warmup)
         set_random_seed(config.seed)
         # Fresh disposable model/optimizer per phase, no pretrained downloads or checkpoints.
-        model = build_model(config.model, pretrained=False).to(runner.device, memory_format=torch.channels_last)
+        model = configure_memory_format(build_model(config.model, pretrained=False).to(runner.device))
         optimizer = build_optimizer(config.train, model)
         ema = build_ema(config.train, model)
         profiler = StageProfiler(runner.device, warmup)
