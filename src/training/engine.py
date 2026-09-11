@@ -210,10 +210,25 @@ class ExperimentRunner:
         cfg = self.config
         checkpoint = cfg.paths.runs_path / cfg.paths.run_name / 'ckpt' / 'last.pt'
         resume_available = cfg.train.resume and checkpoint.is_file()
-        initialization = f'из checkpoint {checkpoint}' if resume_available else 'из pretrained-весов'
+        finetune = cfg.train.finetune_from is not None and not resume_available
+        initialization = (f'из checkpoint {checkpoint}' if resume_available else
+                          f'дотюн из {cfg.train.finetune_from}' if finetune else 'из pretrained-весов')
         ConsoleProgress.info(f'Создание модели {cfg.model.encoder_name}: инициализация {initialization}, '
                              f'перенос на {self.device}')
-        return configure_memory_format(build_model(cfg.model, pretrained=not resume_available).to(self.device))
+        model = build_model(cfg.model, pretrained=not (resume_available or finetune))
+        if finetune:
+            self._load_finetune_weights(model)
+        return configure_memory_format(model.to(self.device))
+
+    def _load_finetune_weights(self, model) -> None:
+        """Start a new optimizer/schedule/EMA from a source run's model weights."""
+        cfg = self.config
+        checkpoint = cfg.paths.runs_path / cfg.train.finetune_from
+        if (checkpoint.parent.parent / 'holdout_claim.json').exists():
+            raise ValueError('Cannot finetune a run after holdout evaluation was claimed')
+        saved = torch.load(checkpoint, map_location='cpu', weights_only=True)
+        EvaluationProtocol.load(cfg.dataset.protocol_path).verify_run(saved['cfg'])
+        model.load_state_dict(saved['model'])
 
     def _check_resume_protocol(self) -> None:
         cfg = self.config

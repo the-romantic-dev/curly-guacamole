@@ -163,6 +163,8 @@ class TrainConfig(ConfigSection):
     ema_decay: float = .999
     grad_clip: float = 1.0
     resume: bool = False
+    # Model weights only; relative paths are resolved against paths.runs_path.
+    finetune_from: str | None = None
 
     def __post_init__(self):
         self.validate()
@@ -175,8 +177,8 @@ class TrainConfig(ConfigSection):
                 raise ValueError(f'train.{name} must be a positive integer')
         if type(self.workers) is not int or self.workers < 0:
             raise ValueError('train.workers must be a nonnegative integer')
-        if type(self.full_train_epochs) is not int or not 0 <= self.full_train_epochs < self.epochs:
-            raise ValueError('train.full_train_epochs must be an integer in [0, epochs)')
+        if type(self.full_train_epochs) is not int or not 0 <= self.full_train_epochs <= self.epochs:
+            raise ValueError('train.full_train_epochs must be an integer in [0, epochs]')
         for name in ('encoder_lr', 'fmap_lr', 'lr'):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0:
@@ -193,6 +195,8 @@ class TrainConfig(ConfigSection):
             raise ValueError("train.amp must be 'off', 'fp16' or 'bf16'")
         if type(self.resume) is not bool:
             raise ValueError('train.resume must be boolean')
+        if self.finetune_from is not None:
+            _non_empty_str(self.finetune_from, 'train.finetune_from')
 
 
 @dataclass(frozen=True)
