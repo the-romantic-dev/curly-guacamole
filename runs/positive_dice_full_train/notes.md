@@ -4,7 +4,7 @@ series: positive
 parent: null
 baseline: null  # если пусто, используется parent
 change: null
-leaderboard_score: null
+leaderboard_score: 0.9172654830032324
 verdict: inconclusive
 source:
 ---

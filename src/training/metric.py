@@ -50,6 +50,7 @@ class AICResult:
     mask_threshold: float = 0.5
     cls_threshold: float = 0.0
     min_area: float = 0.0
+    small_mask_weight: float = 1.0
 
     def as_dict(self) -> dict:
         return {
@@ -61,11 +62,13 @@ class AICResult:
             "mask_threshold": self.mask_threshold,
             "cls_threshold": self.cls_threshold,
             "min_area": self.min_area,
+            "small_mask_weight": self.small_mask_weight,
         }
 
     def __str__(self) -> str:
+        label = 'AIC' if self.small_mask_weight == 1.0 else f'weighted AIC (small={self.small_mask_weight:g})'
         return (
-            f"AIC={self.aic:.4f} (Dice_pos={self.dice_pos:.4f}, FPR_neg={self.fpr_neg:.4f}) "
+            f"{label}={self.aic:.4f} (Dice_pos={self.dice_pos:.4f}, FPR_neg={self.fpr_neg:.4f}) "
             f"@ thr={self.mask_threshold:.3f} cls={self.cls_threshold:.3f} "
             f"min_area={self.min_area:.3f} | pos={self.n_pos} neg={self.n_neg}"
         )
@@ -115,6 +118,8 @@ class AICAccumulator:
     На каждый кадр хранится две гистограммы предсказанных вероятностей
     (по всем пикселям и по пикселям GT) размера `n_bins`. Из них восстанавливается
     |P_t| и |P_t ∩ G| для любого порога t из сетки k / n_bins.
+    small_mask_weight меняет вес Dice позитивов с GT-площадью (1%, 5%].
+    По умолчанию вес 1 сохраняет официальную метрику; FPR не взвешивается.
     """
 
     n_bins: int = 256
@@ -123,6 +128,11 @@ class AICAccumulator:
     gt_sum: list[int] = field(default_factory=list)
     n_pixels: list[int] = field(default_factory=list)
     cls_prob: list[float] = field(default_factory=list)
+    small_mask_weight: float = 1.0
+
+    def __post_init__(self):
+        if isinstance(self.small_mask_weight, bool) or not np.isfinite(self.small_mask_weight) or self.small_mask_weight <= 0:
+            raise ValueError('small_mask_weight must be finite and positive')
 
     @property
     def thresholds(self) -> np.ndarray:
@@ -234,6 +244,9 @@ class AICAccumulator:
         """
         pred_counts, inter_counts, gt_sum, n_pixels, cls_prob = self.tables()
         is_pos = gt_sum > 0
+        # Weight images by original GT area, never by their predicted mask area.
+        gt_area = gt_sum[is_pos] / n_pixels[is_pos]
+        weights = np.where((gt_area > .01) & (gt_area <= .05), self.small_mask_weight, 1.0)
 
         if mask_thresholds is None:
             mask_thresholds = self.thresholds
@@ -257,7 +270,7 @@ class AICAccumulator:
                     area_k = np.where(keep, area, 0.0)
 
                     dice = 2.0 * inter_k / (pred_k + gt_sum + EPS)
-                    dice_pos = float(dice[is_pos].mean()) if is_pos.any() else 0.0
+                    dice_pos = float(np.average(dice[is_pos], weights=weights)) if is_pos.any() else 0.0
                     if (~is_pos).any():
                         fpr_neg = float((area_k[~is_pos] >= FP_AREA_THRESHOLD).mean())
                     else:
@@ -275,6 +288,7 @@ class AICAccumulator:
                             mask_threshold=float(k / self.n_bins),
                             cls_threshold=float(cls_thr),
                             min_area=float(min_area),
+                            small_mask_weight=self.small_mask_weight,
                         )
                     )
 
@@ -295,6 +309,7 @@ class AICAccumulator:
         np.savez_compressed(
             str(path),
             n_bins=self.n_bins,
+            small_mask_weight=self.small_mask_weight,
             hist_all=np.stack(self.hist_all).astype(np.int32),
             hist_gt=np.stack(self.hist_gt).astype(np.int32),
             gt_sum=np.asarray(self.gt_sum, dtype=np.int64),
@@ -305,7 +320,7 @@ class AICAccumulator:
     @classmethod
     def load(cls, path) -> AICAccumulator:
         data = np.load(str(path))
-        acc = cls(n_bins=int(data["n_bins"]))
+        acc = cls(n_bins=int(data["n_bins"]), small_mask_weight=float(data.get("small_mask_weight", 1.0)))
         acc.hist_all = list(data["hist_all"].astype(np.int64))
         acc.hist_gt = list(data["hist_gt"].astype(np.int64))
         acc.gt_sum = data["gt_sum"].tolist()

@@ -70,6 +70,7 @@ class ModelConfig(ConfigSection):
     forensic_mode: str = 'maps'
     jpeg_pretrained: str | None = None
     jpeg_variant: str = 'baseline'
+    fusion_variant: str = 'baseline'
     dct_aux_weight: float = 0.0
     decoder_kwargs: dict[str, Any] = field(default_factory=dict)
     local_image_size: int = 0
@@ -102,6 +103,10 @@ class ModelConfig(ConfigSection):
             raise ValueError('forensic_mode=jpeg requires use_forensics')
         if self.jpeg_variant not in {'baseline', 'signed', 'attention', 'subblock4'}:
             raise ValueError('unknown model.jpeg_variant')
+        if self.fusion_variant not in {'baseline', 'local', 'spatial', 'channel_spatial', 'film', 'cross_attention'}:
+            raise ValueError('unknown model.fusion_variant')
+        if self.fusion_variant != 'baseline' and self.forensic_mode != 'jpeg':
+            raise ValueError('fusion_variant requires forensic_mode=jpeg')
         if self.jpeg_variant != 'baseline' and self.forensic_mode != 'jpeg':
             raise ValueError('jpeg_variant requires forensic_mode=jpeg')
         if self.jpeg_pretrained is not None:
@@ -202,11 +207,14 @@ class TrainConfig(ConfigSection):
 @dataclass(frozen=True)
 class EvalConfig(ConfigSection):
     n_bins: int = 256
+    small_mask_weight: float = 1.0
     mask_thresholds: tuple[float, ...] = DEFAULT_MASK_GRID
     cls_thresholds: tuple[float, ...] = (0., .2, .4, .5, .6, .7, .8, .9, .95)
     min_areas: tuple[float, ...] = (0.,)
 
     def __post_init__(self):
+        if isinstance(self.small_mask_weight, bool) or not math.isfinite(self.small_mask_weight) or self.small_mask_weight <= 0:
+            raise ValueError('eval.small_mask_weight must be finite and positive')
         if type(self.n_bins) is not int or self.n_bins <= 0:
             raise ValueError('eval.n_bins must be a positive integer')
         for name in ('mask_thresholds', 'cls_thresholds', 'min_areas'):
@@ -219,11 +227,25 @@ class EvalConfig(ConfigSection):
 class LossConfig(ConfigSection):
     dice_scope: str = 'all'
     dice_weight: float = 1.0
+    pixel_loss: str = 'bce'
+    focal_gamma: float = 1.0
+    dice_area_reference: float = 0.0
+    dice_area_max_weight: float = 3.0
+    boundary_weight: float = 0.0
+    aux_loss_weight: float | None = None
 
     def __post_init__(self):
         if self.dice_scope not in {'all', 'positive'}:
             raise ValueError("loss.dice_scope must be 'all' or 'positive'")
         _nonnegative(self.dice_weight, 'loss.dice_weight')
+        if self.pixel_loss not in {'bce', 'focal'}:
+            raise ValueError("loss.pixel_loss must be 'bce' or 'focal'")
+        for name in ('focal_gamma', 'boundary_weight', 'dice_area_reference', 'dice_area_max_weight'):
+            _nonnegative(getattr(self, name), f'loss.{name}')
+        if self.dice_area_reference > 1 or self.dice_area_max_weight < 1:
+            raise ValueError('loss area reference must be <= 1 and maximum weight >= 1')
+        if self.aux_loss_weight is not None:
+            _nonnegative(self.aux_loss_weight, 'loss.aux_loss_weight')
 
 
 @dataclass(frozen=True)

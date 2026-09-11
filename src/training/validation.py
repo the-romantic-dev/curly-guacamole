@@ -44,7 +44,7 @@ def validate(
 ) -> ValidationResult:
     model.eval()
     n_bins = config.eval.n_bins
-    acc = AICAccumulator(n_bins=n_bins)
+    acc = AICAccumulator(n_bins=n_bins, small_mask_weight=config.eval.small_mask_weight)
     histograms = DeviceHistogramAccumulator(acc, device)
     meter = LossMeter()
     criterion = SegmentationLoss(**config.loss.to_dict())
@@ -64,7 +64,8 @@ def validate(
             out = model(images, fmap, **kwargs)
 
         # Comparable main-head loss on the network grid; AIC can use original GT.
-        loss_batch = {key: batch[key].to(device) for key in ("mask", "label", "valid_mask") if key in batch}
+        loss_batch = {key: batch[key].to(device) for key in
+                      ("mask", "label", "valid_mask", "boundary_distance") if key in batch}
         meter.update(criterion(out, loss_batch), len(images))
         probs = torch.sigmoid(out["logits"].float())
         cls = torch.sigmoid(out["cls_logits"].float()).reshape(-1)

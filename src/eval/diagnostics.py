@@ -72,9 +72,14 @@ class EvaluationReport:
 
     def summary(self):
         frame = self.per_image()
-        return {name: self.aggregate(subset) for name, subset in (
+        summary = {name: self.aggregate(subset) for name, subset in (
             ('combined', frame), ('provided', frame.loc[frame.target_kind != 'original_zero']),
             ('originals', frame.loc[frame.target_kind == 'original_zero']))}
+        if self.accumulator.small_mask_weight != 1.0 and frame.is_positive.any() and (~frame.is_positive).any():
+            result = self.accumulator.evaluate(self.thresholds.mask_threshold, self.thresholds.cls_threshold,
+                                               self.thresholds.min_area)
+            summary['selection'] = result.as_dict()
+        return summary
 
     def save(self, directory):
         directory = Path(directory)

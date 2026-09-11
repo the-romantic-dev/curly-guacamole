@@ -9,7 +9,7 @@ import torch
 from torch import nn
 
 from src.budget import count_gflops
-from src.config import ExperimentConfig, PIPELINE_VERSION
+from src.config import ExperimentConfig, LossConfig, PIPELINE_VERSION
 from src.data.data_workspace import DataWorkspace
 from src.eval.diagnostics import EvaluationReport
 from src.eval.protocol import EvaluationProtocol
@@ -243,6 +243,9 @@ class ExperimentRunner:
         current = cfg.to_flat_dict()
         saved_dataset = snapshot.get('dataset', snapshot)
         saved_train = snapshot.get('train', snapshot)
+        saved_eval = snapshot.get('eval', snapshot)
+        if saved_eval.get('small_mask_weight', 1.0) != cfg.eval.small_mask_weight:
+            raise ValueError('Cannot resume with a different eval.small_mask_weight; choose a new run_name')
         if cfg.train.full_train_epochs or saved_train.get('full_train_epochs', 0):
             for key in ('full_train_epochs', 'epochs', 'epoch_size', 'batch_size', 'accum_steps',
                         'warmup_frac', 'min_lr_factor', 'encoder_lr', 'fmap_lr', 'lr'):
@@ -257,7 +260,9 @@ class ExperimentRunner:
             for key, value in values.items():
                 # Snapshots predating the optional luma branch mean it was disabled.
                 default = 0 if section == 'model' and key == 'luma_image_size' else None
-                if section == 'model' and key == 'jpeg_variant':
+                if section == 'loss':
+                    default = getattr(LossConfig(), key)
+                if section == 'model' and key in {'jpeg_variant', 'fusion_variant'}:
                     default = 'baseline'
                 if section == 'model' and key == 'strided_resize':
                     default = False

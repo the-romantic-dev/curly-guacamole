@@ -28,6 +28,7 @@ class Segmenter(nn.Module):
         use_forensics=True,
         forensic_mode='maps',
         jpeg_variant='baseline',
+        fusion_variant='baseline',
         dct_aux_weight=0.0,
         decoder_kwargs=None,
         local_image_size=0,
@@ -71,6 +72,7 @@ class Segmenter(nn.Module):
             use_aux=dct_aux_weight > 0,
             forensic_mode=forensic_mode,
             jpeg_variant=jpeg_variant,
+            fusion_variant=fusion_variant,
         ) if use_forensics else None
 
         self.decoder = EMCADDecoder(

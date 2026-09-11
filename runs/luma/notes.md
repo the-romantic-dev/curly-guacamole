@@ -4,7 +4,7 @@ series: luma
 parent: null
 baseline: null  # если пусто, используется parent
 change: null
-leaderboard_score: null
+leaderboard_score: 0.8950252116760438
 verdict: inconclusive
 source:
 ---

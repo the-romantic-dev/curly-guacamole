@@ -90,7 +90,9 @@ class CheckpointEvaluator:
                             collate_fn=ValidationCollator(), worker_init_fn=DataLoaderThreadLimits.apply,
                             pin_memory=self.device.type == 'cuda')
         snapshot = self.run.snapshot
-        acc = AICAccumulator(n_bins=int(snapshot.get('eval', snapshot).get('n_bins', 256)))
+        evaluation = snapshot.get('eval', snapshot)
+        acc = AICAccumulator(n_bins=int(evaluation.get('n_bins', 256)),
+                             small_mask_weight=evaluation.get('small_mask_weight', 1.0))
         histograms = DeviceHistogramAccumulator(acc, self.device)
         try:
             with torch.inference_mode():

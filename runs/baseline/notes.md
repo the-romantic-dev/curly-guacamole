@@ -4,7 +4,7 @@ series: emcad
 parent: null
 baseline: null  # если пусто, используется parent
 change: null
-leaderboard_score: null
+leaderboard_score: 0.8970629753491126
 verdict: inconclusive
 source:
 ---

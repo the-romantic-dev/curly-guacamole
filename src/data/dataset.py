@@ -14,6 +14,7 @@ from src.data.data_sample import DataSample
 from src.data.data_workspace import DataWorkspace
 from src.data.preprocess import SamplePreprocessor
 from src.data.sample_io import SampleIO
+from src.data.targets import SignedDistanceTarget
 from src.data.local_preprocess import LocalPreprocessor
 from src.data.profiling import SampleTimer
 from src.forensic.dct import forensic_maps, luma_qtable
@@ -48,11 +49,13 @@ class AIIJCDataset(Dataset):
             luma_image_size: int = 0,
             local_dtype: torch.dtype = torch.float32,
             strided_resize: bool = False,
+            boundary_targets: bool = False,
     ):
         super().__init__()
         self.data_workspace = data_workspace
         self.mode = self._resolve_mode(train, mode)
         self.train = self.mode == "train"
+        self.boundary_target = SignedDistanceTarget() if boundary_targets else None
         self.has_targets = self.mode in {"train", "val"}
         self.use_forensics = use_forensics
         if strided_resize and (use_forensics or local_image_size or luma_image_size):
@@ -173,6 +176,8 @@ class AIIJCDataset(Dataset):
             if timer:
                 timer.mark('photometric')
         output = self.preprocessor.to_output(sample)
+        if self.boundary_target is not None and self.has_targets:
+            output['boundary_distance'] = self.boundary_target(output['mask'], output.get('valid_mask'))
         if sample.jpeg is not None:
             output['jpeg'] = sample.jpeg.tensors()
         if local_input is not None:

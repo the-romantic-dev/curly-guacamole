@@ -11,7 +11,7 @@ class ForensicFusion(nn.Module):
 
     FUSION_STRIDES = (8, 16, 32)
 
-    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False, forensic_mode='maps', jpeg_variant='baseline'):
+    def __init__(self, encoder_strides, encoder_channels, forensic_channels, use_aux=False, forensic_mode='maps', jpeg_variant='baseline', fusion_variant='baseline'):
         super().__init__()
 
         if len(encoder_strides) != len(encoder_channels):
@@ -45,6 +45,7 @@ class ForensicFusion(nn.Module):
             str(stride): GatedFuse(
                 encoder_channels[encoder_strides.index(stride)],
                 self.branch.channels_by_stride[stride],
+                variant=fusion_variant,
             )
             for stride in self.fusion_strides
         })

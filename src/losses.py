@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 
 import torch
 import torch.nn.functional as F
@@ -31,14 +32,57 @@ class LossResult:
     diagnostics: dict[str, tuple[torch.Tensor, torch.Tensor]]
 
 
+class BinaryFocalLoss(torch.nn.Module):
+    """Stable binary focal loss without alpha class balancing."""
+
+    def __init__(self, gamma=1.0):
+        super().__init__()
+        if not math.isfinite(gamma) or gamma < 0:
+            raise ValueError('focal gamma must be finite and non-negative')
+        self.gamma = gamma
+
+    def forward(self, logits, target, valid_mask=None):
+        ce = F.binary_cross_entropy_with_logits(logits.float(), target.float(), reduction='none')
+        # Avoid the infinite derivative of x**gamma at x=0 for 0<gamma<1.
+        modulation = (-torch.expm1(-ce)).clamp_min(torch.finfo(ce.dtype).tiny)
+        loss = modulation.pow(self.gamma) * ce
+        if valid_mask is None:
+            return loss.mean()
+        return ((loss * valid_mask).flatten(1).sum(1) /
+                valid_mask.flatten(1).sum(1).clamp_min(1)).mean()
+
+
+class BoundaryLoss(torch.nn.Module):
+    """Mean foreground probability times normalized signed GT distance.
+
+    Maps are prepared in loader workers. Empty/full valid targets have zero
+    maps and are excluded from the conditional mean. The loss can be negative.
+    """
+
+    def forward(self, logits, distance, valid=None):
+        if logits.shape != distance.shape:
+            raise ValueError('Boundary distance must match segmentation logits')
+        weighted = logits.float().sigmoid() * distance.float()
+        if valid is not None:
+            distance = distance * valid
+            weighted = weighted * valid
+            per_image = weighted.flatten(1).sum(1) / valid.flatten(1).sum(1).clamp_min(1)
+        else:
+            per_image = weighted.flatten(1).mean(1)
+        selected = distance.flatten(1).ne(0).any(1)
+        return (per_image * selected).sum() / selected.sum().clamp_min(1)
+
+
 class SegmentationLoss(torch.nn.Module):
-    """BCE on every mask; configurable per-image Dice on all or positive masks.
+    """Configurable pixel, area-weighted Dice, boundary and classification loss.
 
     Components are weighted contributions whose sum equals total. Diagnostics
     contain unweighted main-head Dice sums/counts, separated by target group.
     """
 
-    def __init__(self, *, dice_scope="all", dice_weight=1.0, aux_weight=0.0, dct_aux_weight=0.0):
+    def __init__(self, *, dice_scope="all", dice_weight=1.0, aux_weight=0.0, dct_aux_weight=0.0,
+                 pixel_loss='bce', focal_gamma=1.0, dice_area_reference=0.0,
+                 dice_area_max_weight=3.0, boundary_weight=0.0, aux_loss_weight=None):
         super().__init__()
         if dice_scope not in {"all", "positive"}:
             raise ValueError("loss.dice_scope must be 'all' or 'positive'")
@@ -48,8 +92,19 @@ class SegmentationLoss(torch.nn.Module):
                 raise ValueError(f"loss.{name} must be finite and non-negative")
         self.dice_scope = dice_scope
         self.dice_weight = dice_weight
-        self.aux_weight = aux_weight
+        from src.config import LossConfig
+        LossConfig(dice_scope=dice_scope, dice_weight=dice_weight, pixel_loss=pixel_loss,
+                   focal_gamma=focal_gamma, dice_area_reference=dice_area_reference,
+                   dice_area_max_weight=dice_area_max_weight, boundary_weight=boundary_weight,
+                   aux_loss_weight=aux_loss_weight)
+        self.aux_weight = aux_weight if aux_loss_weight is None else aux_loss_weight
         self.dct_aux_weight = dct_aux_weight
+        self.pixel_loss = pixel_loss
+        self.focal = BinaryFocalLoss(focal_gamma)
+        self.dice_area_reference = dice_area_reference
+        self.dice_area_max_weight = dice_area_max_weight
+        self.boundary_weight = boundary_weight
+        self.boundary = BoundaryLoss()
 
     def _dice(self, logits, target, valid):
         # Accumulate in float32, including under mixed precision training.
@@ -65,7 +120,14 @@ class SegmentationLoss(torch.nn.Module):
         losses = 1 - (2 * intersection.sum(1) + 1) / (probs.sum(1) + target.sum(1) + 1)
         selected = positive if self.dice_scope == "positive" else torch.ones_like(positive)
         # Zero with a gradient path when the batch has no positive targets.
-        dice = (losses * selected).sum() / selected.sum().clamp_min(1)
+        weights = selected.float()
+        if self.dice_area_reference > 0:
+            pixels = target.shape[1] if valid is None else valid.flatten(1).sum(1).clamp_min(1)
+            area = target.sum(1) / pixels
+            size_weight = (self.dice_area_reference / area.clamp_min(1e-8)).sqrt()
+            size_weight = size_weight.clamp(1, self.dice_area_max_weight)
+            weights = weights * torch.where(positive, size_weight, 1.)
+        dice = (losses * weights).sum() / weights.sum().clamp_min(1)
         return dice, losses, positive
 
     def forward(self, out, batch):
@@ -76,10 +138,16 @@ class SegmentationLoss(torch.nn.Module):
         if labels is None:
             labels = positive.float().reshape_as(out["cls_logits"])
         components = {
-            "bce": bce_loss(out["logits"].float(), target, valid_mask=valid),
+            self.pixel_loss: (self.focal if self.pixel_loss == 'focal' else bce_loss)(
+                out["logits"].float(), target, valid_mask=valid),
             "dice": self.dice_weight * dice,
             "cls": .3 * bce_loss(out["cls_logits"].float(), labels.float()),
         }
+        if self.boundary_weight > 0:
+            if 'boundary_distance' not in batch:
+                raise ValueError('Boundary loss requires boundary_distance from the training dataset')
+            components['boundary'] = self.boundary_weight * self.boundary(
+                out['logits'], batch['boundary_distance'], valid)
         if self.aux_weight > 0 and "aux_logits" in out:
             logits = out["aux_logits"].float()
             components["aux_bce"] = self.aux_weight * bce_loss(logits, target, valid_mask=valid)

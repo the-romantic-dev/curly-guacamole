@@ -1,0 +1,8 @@
+extends: jpeg576_pretrained_positive_dice.yaml
+paths:
+  run_name: jpeg576_fusion_baseline_weighted_val
+model:
+  jpeg_variant: baseline
+  fusion_variant: baseline
+eval:
+  small_mask_weight: 1.6
