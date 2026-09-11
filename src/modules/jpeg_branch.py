@@ -38,6 +38,43 @@ class JPEGFrameBatchNorm2d(nn.BatchNorm2d):
                 cls.replace_in(child)
 
 
+class _PointwiseConvWithoutCuDNN(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, weight):
+        ctx.save_for_backward(x, weight)
+        with torch.backends.cudnn.flags(enabled=False):
+            return F.conv2d(x, weight)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, weight = ctx.saved_tensors
+        # PyTorch queries cuDNN flags again in backward, independently of forward.
+        with torch.backends.cudnn.flags(enabled=False):
+            grad_x, grad_weight, _ = torch.ops.aten.convolution_backward(
+                grad_output, x, weight, None, [1, 1], [0, 0], [1, 1],
+                False, [0, 0], 1, [*ctx.needs_input_grad, False],
+            )
+        return grad_x, grad_weight
+
+
+class JPEGPointwiseConv2d(nn.Conv2d):
+    """Keep Conv2d checkpoint keys while avoiding per-shape cuDNN compilation."""
+
+    def __init__(self):
+        super().__init__(64, 4, 1, bias=False)
+
+    def forward(self, x):
+        if x.device.type == 'meta':
+            return super().forward(x)
+        weight = self.weight
+        # Cast outside the custom Function so AMP gradients reach FP32 weights.
+        if torch.is_autocast_enabled(x.device.type):
+            dtype = torch.get_autocast_dtype(x.device.type)
+            x, weight = x.to(dtype), weight.to(dtype)
+        with torch.autocast(device_type=x.device.type, enabled=False):
+            return _PointwiseConvWithoutCuDNN.apply(x, weight)
+
+
 class JPEGArtifactModule(nn.Module):
     """Frequency-wise CAT-Net stem; input is min(abs(quantized Y DCT), 20)."""
 
@@ -47,7 +84,7 @@ class JPEGArtifactModule(nn.Module):
             nn.Conv2d(21, 64, 3, dilation=8, padding=8),
             nn.BatchNorm2d(64, momentum=0.01), nn.ReLU(inplace=True))
         self.dc_layer1_tail = nn.Sequential(
-            nn.Conv2d(64, 4, 1, bias=False),
+            JPEGPointwiseConv2d(),
             nn.BatchNorm2d(4, momentum=0.01), nn.ReLU(inplace=True))
 
     def forward(self, bins, qtable):
