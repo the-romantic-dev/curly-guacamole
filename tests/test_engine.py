@@ -210,7 +210,8 @@ def test_resume_state_starts_after_saved_epoch(tmp_path):
 
 
 
-def test_epoch_logs_loss_components_and_fixed_validation(tmp_path):
+@pytest.mark.parametrize('pixel_loss,boundary', [('bce', 0.), ('focal', -.05)])
+def test_epoch_logs_loss_components_and_fixed_validation(tmp_path, pixel_loss, boundary):
     import json
     import time
     from types import SimpleNamespace
@@ -227,7 +228,10 @@ def test_epoch_logs_loss_components_and_fixed_validation(tmp_path):
     acc = AICAccumulator(n_bins=16)
     acc.update(np.array([[[.9]], [[.1]]]), np.array([[[1]], [[0]]]))
     score = acc.evaluate(.5)
-    validation = ValidationResult(acc, score, loss_components={"total": .6, "bce": .1, "dice": .2, "cls": .3}, fixed=score)
+    components = {"total": .6 + boundary, pixel_loss: .1, "dice": .2, "cls": .3}
+    if boundary:
+        components['boundary'] = boundary
+    validation = ValidationResult(acc, score, loss_components=components, fixed=score)
     result = EpochTrainResult(.9, 0, 2, .5, {"total": .9, "bce": .2, "dice": .4, "cls": .3, "dice_pos": .5})
     with Run.create(tmp_path, "logging", tensorboard=False) as run:
         runner._log_epoch(run=run, epoch=0, model=SimpleNamespace(forensic_gate_stats=lambda: {"max_abs": 0}),
@@ -236,7 +240,7 @@ def test_epoch_logs_loss_components_and_fixed_validation(tmp_path):
     row = json.loads(run.jsonl_path.read_text(encoding="utf-8").splitlines()[0])
     assert row["train/loss"] == .9
     assert row["train/loss_dice_pos"] == .5
-    assert row["val/loss_main"] == pytest.approx(.3)
-    assert row["val/loss_total"] == .6
+    assert row["val/loss_main"] == pytest.approx(.3 + boundary)
+    assert row["val/loss_total"] == .6 + boundary
     assert row["val/aic_fixed"] == score.aic
     assert "val/loss_main" in run.csv_path.read_text(encoding="utf-8")

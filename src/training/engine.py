@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Iterable, Sized
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 import torch
 from torch import nn
@@ -49,6 +49,8 @@ class TrainingState:
     seen_total: int = 0
     best_aic: float = -1.0
     best_result: AICResult | None = None
+    pending_train_result: EpochTrainResult | None = None
+    train_elapsed_s: float = 0.0
 
 
 class ExperimentRunner:
@@ -122,43 +124,41 @@ class ExperimentRunner:
                     steps_per_epoch = math.ceil(len(train_loader) / cfg.train.accum_steps)
                 train_loader.sampler.generator = torch.Generator().manual_seed(cfg.seed + epoch)
                 started = time.time()
-                run.info(f"Полные кадры: p={train_ds.augmentations.full_frame_probability:.2f}; "
-                         "валидация: original")
-                run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение; "
-                         f"показов={len(train_loader.sampler)}, optimizer steps={steps_per_epoch}")
-                train_result = train_one_epoch(
-                    model=model,
-                    loader=train_loader,
-                    optimizer=optimizer,
-                    scheduler=scheduler,
-                    scaler=scaler,
-                    ema=ema,
-                    amp=self.amp,
-                    config=cfg,
-                    device=self.device,
-                )
-                state.seen_total += train_result.seen
+                if state.pending_train_result is not None:
+                    train_result = state.pending_train_result
+                    started -= state.train_elapsed_s
+                    run.info(f"Эпоха {epoch + 1}: обучение уже сохранено; повторяю только валидацию")
+                else:
+                    run.info(f"Полные кадры: p={train_ds.augmentations.full_frame_probability:.2f}; "
+                             "валидация: original")
+                    run.info(f"Эпоха {epoch + 1}/{cfg.train.epochs}: обучение; "
+                             f"показов={len(train_loader.sampler)}, optimizer steps={steps_per_epoch}")
+                    train_result = train_one_epoch(
+                        model=model,
+                        loader=train_loader,
+                        optimizer=optimizer,
+                        scheduler=scheduler,
+                        scaler=scaler,
+                        ema=ema,
+                        amp=self.amp,
+                        config=cfg,
+                        device=self.device,
+                    )
+                    state.seen_total += train_result.seen
+                    state.pending_train_result = train_result
+                    state.train_elapsed_s = time.time() - started
+                    # Commit training before any post-training output or validation.
+                    self._save_training_checkpoint(
+                        run, model, ema, optimizer, scheduler, scaler, epoch, state, plain_config,
+                        validation_complete=False,
+                    )
                 run.info(f"Обучение завершено: loss={train_result.loss:.5f}, примеров={train_result.seen}; валидация EMA")
                 validation = validate(ema.module, val_loader, self.amp, cfg, self.device)
                 tuned = validation.tuned
 
-                self._log_epoch(
-                    run=run,
-                    epoch=epoch,
-                    model=model,
-                    train_result=train_result,
-                    tuned=tuned,
-                    seen_total=state.seen_total,
-                    started=started,
-                    steps_per_epoch=steps_per_epoch,
-                    optimizer=optimizer,
-                    validation=validation,
-                )
-
                 if tuned.aic > state.best_aic:
                     state.best_aic = tuned.aic
                     state.best_result = tuned
-                    run.info("Сохранение лучшего checkpoint: ckpt/best.pt")
                     run.save_state(
                         {
                             "model": model.state_dict(),
@@ -179,21 +179,22 @@ class ExperimentRunner:
                     run.save_summary({'development': report.summary()})
                     run.info(f"  новый лучший AIC {state.best_aic:.4f} -> ckpt/best.pt")
 
-                run.info("Сохранение checkpoint для продолжения: ckpt/last.pt")
-                run.save_state(
-                    {
-                        "model": model.state_dict(),
-                        "ema": ema.module.state_dict(),
-                        "ema_n_averaged": int(ema.n_averaged),
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "scaler": scaler.state_dict(),
-                        "epoch": epoch,
-                        "samples": state.seen_total,
-                        "best_aic": state.best_aic,
-                        "cfg": plain_config,
-                    },
-                    "last.pt",
+                self._save_training_checkpoint(
+                    run, model, ema, optimizer, scheduler, scaler, epoch, state, plain_config,
+                    validation_complete=True,
+                )
+                state.pending_train_result = None
+                self._log_epoch(
+                    run=run,
+                    epoch=epoch,
+                    model=model,
+                    train_result=train_result,
+                    tuned=tuned,
+                    seen_total=state.seen_total,
+                    started=started,
+                    steps_per_epoch=steps_per_epoch,
+                    optimizer=optimizer,
+                    validation=validation,
                 )
 
             run.info("Сохранение итоговой сводки")
@@ -205,6 +206,27 @@ class ExperimentRunner:
             del model, ema, optimizer, val_loader, train_loader, scaler
             if self.device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    @staticmethod
+    def _save_training_checkpoint(run, model, ema, optimizer, scheduler, scaler,
+                                  epoch, state, plain_config, *, validation_complete):
+        """Atomic training commit; validation artifacts are a separate phase."""
+        run.save_state({
+            'model': model.state_dict(),
+            'ema': ema.module.state_dict(),
+            'ema_n_averaged': int(ema.n_averaged),
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict(),
+            'scaler': scaler.state_dict(),
+            'epoch': epoch,
+            'samples': state.seen_total,
+            'best_aic': state.best_aic,
+            'best_result': state.best_result.as_dict() if state.best_result is not None else None,
+            'validation_complete': validation_complete,
+            'train_result': asdict(state.pending_train_result),
+            'train_elapsed_s': state.train_elapsed_s,
+            'cfg': plain_config,
+        }, 'last.pt')
 
     def _build_training_model(self):
         cfg = self.config
@@ -322,11 +344,20 @@ class ExperimentRunner:
                 (saved_epoch + 1) * cfg.train.epoch_size,
             )
         )
-        state.start_epoch = saved_epoch + 1
-        state.best_aic = max(
-            float(saved.get("best_aic", -1.0)),
-            float(run.summary.get("best_aic", -1.0)),
-        )
+        validation_complete = saved.get('validation_complete', True)
+        state.start_epoch = saved_epoch + 1 if validation_complete else saved_epoch
+        state.best_aic = float(saved.get('best_aic', -1.0))
+        best_result = saved.get('best_result')
+        if validation_complete:
+            state.best_aic = max(state.best_aic, float(run.summary.get('best_aic', -1.0)))
+            best_result = best_result or run.summary.get('best')
+        else:
+            # Summary/OOF may have been partially written by the failed evaluation.
+            # Replay against the pre-validation best, including artifact writes.
+            state.pending_train_result = EpochTrainResult(**saved['train_result'])
+            state.train_elapsed_s = float(saved.get('train_elapsed_s', 0.0))
+        if best_result is not None:
+            state.best_result = AICResult(**best_result)
         run.info(
             f"ПРОДОЛЖАЮ: эпоха {state.start_epoch} из {cfg.train.epochs}, "
             f"показов {state.seen_total}, лучший AIC {state.best_aic:.4f}"
@@ -351,7 +382,10 @@ class ExperimentRunner:
         if validation is not None:
             extra.update({f"val/loss_{key}": value for key, value in validation.loss_components.items()})
             if validation.loss_components:
-                extra["val/loss_main"] = validation.loss_components["bce"] + validation.loss_components["dice"]
+                extra["val/loss_main"] = sum(
+                    validation.loss_components.get(key, 0.0)
+                    for key in ("bce", "focal", "dice", "boundary")
+                )
             if validation.fixed is not None:
                 extra.update({"val/aic_fixed": validation.fixed.aic,
                               "val/dice_fixed": validation.fixed.dice_pos,
