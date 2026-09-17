@@ -69,7 +69,7 @@ def test_build_model_selects_independent_pvt_dgforce_model(monkeypatch):
     monkeypatch.setattr('src.modules.sync_batchnorm.SynchronizedBatchNorm.apply', lambda model: model)
     config = ModelConfig(architecture='pvt_dgforce', jpeg_pretrained=None,
                          dgforce_reduction=8, dgforce_attention_width=64,
-                         dgforce_attention_heads=4)
+                         dgforce_attention_heads=4, dgforce_transfer_reduction=2)
 
     model = builders.build_model(config, aux_weight=0.0, pretrained=False)
 
@@ -78,6 +78,7 @@ def test_build_model_selects_independent_pvt_dgforce_model(monkeypatch):
     assert captured['reduction'] == 8
     assert captured['attention_width'] == 64
     assert captured['attention_heads'] == 4
+    assert captured['transfer_reduction'] == 2
 
 
 def test_build_loaders_uses_train_config():

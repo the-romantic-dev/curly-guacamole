@@ -16,7 +16,7 @@ class PVTDGForceEncoder(nn.Module):
     INTRA_PAIRS = (((0, 2),), ((0, 3),), ((0, 4), (1, 5)))
 
     def __init__(self, *, pretrained=True, reduction=16, attention_width=128,
-                 attention_heads=4, encoder='pvt_v2_b2'):
+                 attention_heads=4, transfer_reduction=4, encoder='pvt_v2_b2'):
         super().__init__()
         if encoder != 'pvt_v2_b2':
             raise ValueError("PVT-DGForce currently supports only encoder='pvt_v2_b2'")
@@ -35,7 +35,7 @@ class PVTDGForceEncoder(nn.Module):
         })
         self.intra_transfers = nn.ModuleDict({
             self._transfer_key(stage, shallow, deep, cue): IntraScaleTransfer(
-                self.channels[stage - 1])
+                self.channels[stage - 1], transfer_reduction)
             for stage, pairs in enumerate(self.intra_pairs, start=1)
             for shallow, deep in pairs
             for cue in ('patch', 'edge')
@@ -43,10 +43,20 @@ class PVTDGForceEncoder(nn.Module):
         self.cross_transfers = nn.ModuleDict({
             f's{stage}_{cue}': CrossScaleTransfer(
                 self.channels[stage - 1], self.channels[stage - 2],
-                attention_width, attention_heads)
+                attention_width, attention_heads, self._key_stride(stage))
             for stage in (2, 3)
             for cue in ('patch', 'edge')
         })
+
+    def _key_stride(self, stage):
+        # Cross-scale keys reuse the spatial-reduction ratio of the stage itself.
+        return self.backbone.stages[stage - 1].blocks[0].attn.sr.stride[0]
+
+    def gate_stats(self) -> dict[str, float]:
+        gates = [level.channel_gate for level in self.dfdg.values()]
+        gates += [module.gate for module in self.intra_transfers.values()]
+        gates += [module.gate for module in self.cross_transfers.values()]
+        return {'max_abs': max(float(gate.detach().abs().max()) for gate in gates)}
 
     @staticmethod
     def _key(stage, block):

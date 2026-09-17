@@ -81,6 +81,7 @@ class ModelConfig(ConfigSection):
     dgforce_reduction: int = 16
     dgforce_attention_width: int = 128
     dgforce_attention_heads: int = 4
+    dgforce_transfer_reduction: int = 4
 
     def __post_init__(self):
         if self.architecture not in {'segmenter', 'pvt_dgforce'}:
@@ -88,7 +89,8 @@ class ModelConfig(ConfigSection):
         _non_empty_str(self.encoder, 'model.encoder')
         if self.architecture == 'pvt_dgforce' and self.encoder != 'pvt_v2_b2':
             raise ValueError("model.architecture=pvt_dgforce supports only encoder='pvt_v2_b2'")
-        for key in ('dgforce_reduction', 'dgforce_attention_width', 'dgforce_attention_heads'):
+        for key in ('dgforce_reduction', 'dgforce_attention_width', 'dgforce_attention_heads',
+                    'dgforce_transfer_reduction'):
             if type(getattr(self, key)) is not int or getattr(self, key) < 1:
                 raise ValueError(f'model.{key} must be a positive integer')
         if self.dgforce_attention_width % self.dgforce_attention_heads:

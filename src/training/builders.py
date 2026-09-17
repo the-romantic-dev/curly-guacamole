@@ -72,7 +72,8 @@ def build_model(config: ModelConfig, *, aux_weight: float = .4, pretrained: bool
             aux_weight=aux_weight, pretrained=pretrained,
             reduction=config.dgforce_reduction,
             attention_width=config.dgforce_attention_width,
-            attention_heads=config.dgforce_attention_heads)
+            attention_heads=config.dgforce_attention_heads,
+            transfer_reduction=config.dgforce_transfer_reduction)
     else:
         from src.modules.segmenter import Segmenter
         model = Segmenter(encoder=config.encoder, jpeg_channels=config.jpeg_channels,

@@ -15,11 +15,12 @@ class PVTDGForceSegmenter(nn.Module):
 
     def __init__(self, encoder='pvt_v2_b2', jpeg_channels=(64, 96, 128),
                  aux_weight=0.0, *, pretrained=True, reduction=16,
-                 attention_width=128, attention_heads=4):
+                 attention_width=128, attention_heads=4, transfer_reduction=4):
         super().__init__()
         self.encoder = PVTDGForceEncoder(
             encoder=encoder, pretrained=pretrained, reduction=reduction,
-            attention_width=attention_width, attention_heads=attention_heads)
+            attention_width=attention_width, attention_heads=attention_heads,
+            transfer_reduction=transfer_reduction)
         self.strides, self.channels = self.encoder.strides, self.encoder.channels
         self.forensic_fusion = ForensicFusion(self.strides, self.channels, jpeg_channels)
         self.decoder = EMCADDecoder(self.channels, self.strides, use_aux=aux_weight > 0)
@@ -31,9 +32,8 @@ class PVTDGForceSegmenter(nn.Module):
     def forensic_gate_stats(self):
         return self.forensic_fusion.gate_stats()
 
-    @staticmethod
-    def disentangle_gate_stats():
-        return {'max_abs': 0.0}
+    def disentangle_gate_stats(self):
+        return self.encoder.gate_stats()
 
     def forward(self, image, *, jpeg):
         if not isinstance(jpeg, (list, tuple)) or len(jpeg) != image.shape[0]:

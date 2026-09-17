@@ -16,6 +16,9 @@ def test_model_config_validates_pvt_dgforce_settings():
         ModelConfig(architecture='pvt_dgforce', encoder='resnet18')
     with pytest.raises(ValueError, match='divide'):
         ModelConfig(dgforce_attention_width=63, dgforce_attention_heads=4)
+    assert ModelConfig().dgforce_transfer_reduction == 4
+    with pytest.raises(ValueError, match='dgforce_transfer_reduction'):
+        ModelConfig(dgforce_transfer_reduction=0)
 
 
 def test_inheritance_merges_nested_sections_and_replaces_lists(tmp_path, monkeypatch):

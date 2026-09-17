@@ -33,10 +33,37 @@ def test_dfdg_adaptive_weights_sum_to_one_per_position():
     torch.testing.assert_close(weights.sum(1), torch.ones(2, 5, 7))
 
 
+def test_dfdg_starts_as_identity_so_pretrained_features_survive_insertion():
+    from src.modules.dgforce import DFDGLevel
+
+    level = DFDGLevel(8, reduction=2).train()
+    x = torch.randn(2, 8, 5, 7)
+    enriched, *_ = level(x)
+
+    torch.testing.assert_close(enriched, x)
+
+
+def test_pvt_dgforce_encoder_reproduces_backbone_features_at_init():
+    from src.modules.pvt_dgforce import PVTDGForceEncoder
+
+    torch.manual_seed(0)
+    encoder = PVTDGForceEncoder(pretrained=False, reduction=16,
+                                attention_width=32, attention_heads=4).train()
+    encoder.backbone.eval()
+    image = torch.randn(2, 3, 64, 96)
+
+    with torch.no_grad():
+        reference = encoder.backbone.forward_intermediates(image, intermediates_only=True)
+        features, _, _ = encoder(image, supervise=True)
+
+    for feature, expected in zip(features, reference):
+        torch.testing.assert_close(feature, expected)
+
+
 def test_intra_scale_transfer_preserves_rectangular_shape_and_starts_as_identity():
     from src.modules.dgforce import IntraScaleTransfer
 
-    transfer = IntraScaleTransfer(8)
+    transfer = IntraScaleTransfer(8, reduction=2)
     current = torch.randn(2, 8, 5, 7)
     shallow = torch.randn(2, 8, 5, 7)
 
@@ -46,11 +73,69 @@ def test_intra_scale_transfer_preserves_rectangular_shape_and_starts_as_identity
 def test_cross_scale_transfer_preserves_target_shape_and_starts_as_identity():
     from src.modules.dgforce import CrossScaleTransfer
 
-    transfer = CrossScaleTransfer(target_channels=8, source_channels=4, width=8, heads=2)
+    transfer = CrossScaleTransfer(target_channels=8, source_channels=4, width=8, heads=2,
+                                  kv_stride=2)
     target = torch.randn(2, 8, 5, 7)
     source = torch.randn(2, 4, 10, 14)
 
     torch.testing.assert_close(transfer(target, source), target)
+
+
+def test_intra_scale_transfer_runs_in_a_bottleneck():
+    from src.modules.dgforce import IntraScaleTransfer
+
+    transfer = IntraScaleTransfer(64, reduction=4)
+
+    dense_3x3 = 9 * 64 * 64
+    assert transfer.width == 16
+    assert sum(p.numel() for p in transfer.parameters()) < dense_3x3
+
+
+def test_cross_scale_transfer_pools_keys_to_a_strided_grid():
+    from src.modules.dgforce import CrossScaleTransfer
+
+    transfer = CrossScaleTransfer(target_channels=8, source_channels=4, width=8, heads=2,
+                                  kv_stride=4)
+    seen = {}
+    transfer.attention.register_forward_hook(
+        lambda module, args, output: seen.update(query=tuple(args[0].shape),
+                                                 key=tuple(args[1].shape)))
+    target = torch.randn(2, 8, 8, 12)
+    source = torch.randn(2, 4, 16, 24)
+
+    assert transfer(target, source).shape == target.shape
+    assert seen['query'] == (2, 96, 8)
+    assert seen['key'] == (2, 6, 8)
+
+
+def test_edge_disentangle_extracts_with_3x3_and_restores_pointwise():
+    from src.modules.dgforce import EdgeForensicDisentangle
+
+    edge = EdgeForensicDisentangle(16, reduction=4)
+
+    assert edge.down[0].kernel_size == (3, 3)
+    assert edge.up[0].kernel_size == (1, 1)
+
+
+def test_pvt_dgforce_encoder_takes_cross_scale_key_stride_from_backbone_attention():
+    from src.modules.pvt_dgforce import PVTDGForceEncoder
+
+    encoder = PVTDGForceEncoder(pretrained=False, reduction=16,
+                                attention_width=32, attention_heads=4)
+
+    assert {key: module.kv_stride for key, module in encoder.cross_transfers.items()} == {
+        's2_patch': 4, 's2_edge': 4, 's3_patch': 2, 's3_edge': 2}
+
+
+def test_pvt_dgforce_encoder_builds_bottleneck_transfers_from_transfer_reduction():
+    from src.modules.pvt_dgforce import PVTDGForceEncoder
+
+    encoder = PVTDGForceEncoder(pretrained=False, reduction=16,
+                                attention_width=32, attention_heads=4,
+                                transfer_reduction=8)
+
+    assert encoder.intra_transfers['s1_b0_to_b2_patch'].width == 64 // 8
+    assert encoder.intra_transfers['s3_b1_to_b5_edge'].width == 320 // 8
 
 
 def test_pvt_dgforce_encoder_matches_paper_layer_placement():
@@ -144,3 +229,18 @@ def test_pvt_dgforce_experiment_config_is_isolated_and_uses_paper_loss():
     assert config.dataset == baseline.dataset
     assert config.augmentation == baseline.augmentation
     assert config.train == baseline.train
+
+def test_pvt_dgforce_640_tr8_aw64_config_narrows_transfers_to_fit_the_budget_at_640():
+    from src.config import load_experiment_config
+
+    base = load_experiment_config('configs/experiments/pvt_dgforce.yaml')
+    config = load_experiment_config('configs/experiments/pvt_dgforce_640_tr8_aw64.yaml')
+
+    assert config.run_name == 'pvt_dgforce_640_tr8_aw64'
+    assert config.dataset.image_size == 640
+    assert config.model.dgforce_transfer_reduction == 8
+    assert config.model.dgforce_attention_width == 64
+    assert config.model.dgforce_attention_heads == base.model.dgforce_attention_heads
+    assert config.model.dgforce_reduction == base.model.dgforce_reduction
+    assert config.loss == base.loss
+    assert config.train == base.train

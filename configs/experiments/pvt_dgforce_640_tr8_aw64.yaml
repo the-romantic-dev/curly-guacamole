@@ -1,0 +1,8 @@
+# PVT-DGForce at RGB 640 under 100 GFLOPs: narrower MFT transfers.
+# transfer_reduction 8 + attention_width 64: 640 -> 99.366 GFLOPs at native
+# 1080x1920 (97.56 at 1024²); 648 exceeds 100. Default widths need RGB 624.
+extends: pvt_dgforce.yaml
+run_name: pvt_dgforce_640_tr8_aw64
+model:
+  dgforce_transfer_reduction: 8
+  dgforce_attention_width: 64
