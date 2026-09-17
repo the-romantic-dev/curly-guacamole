@@ -244,3 +244,40 @@ def test_pvt_dgforce_640_tr8_aw64_config_narrows_transfers_to_fit_the_budget_at_
     assert config.model.dgforce_reduction == base.model.dgforce_reduction
     assert config.loss == base.loss
     assert config.train == base.train
+
+def test_pvt_dgforce_accepts_the_standard_loss_with_patch_and_edge_supervision():
+    from dataclasses import replace
+    from src.config import LossConfig, load_experiment_config
+
+    config = load_experiment_config('configs/experiments/pvt_dgforce.yaml')
+    standard = LossConfig(mode='standard', mask_weight=2.0, dice_weight=1.0,
+                          aux_weight=0.4, patch_weight=1.0, edge_weight=1.0)
+
+    assert replace(config, loss=standard).loss.mode == 'standard'
+
+
+def test_build_loss_keeps_mask_weight_in_standard_mode():
+    from src.config import LossConfig
+    from src.losses import SegmentationLoss, build_loss
+
+    criterion = build_loss(LossConfig(mask_weight=2.0))
+
+    assert isinstance(criterion, SegmentationLoss)
+    assert criterion.mask_weight == 2.0
+
+
+def test_pvt_dgforce_stdloss_config_restores_the_project_objective_on_top_of_the_budget_fit():
+    from src.config import load_experiment_config
+
+    budget = load_experiment_config('configs/experiments/pvt_dgforce_640_tr8_aw64.yaml')
+    config = load_experiment_config(
+        'configs/experiments/pvt_dgforce_640_tr8_aw64_stdloss.yaml')
+
+    assert config.run_name == 'pvt_dgforce_640_tr8_aw64_stdloss'
+    assert config.model == budget.model
+    assert config.dataset == budget.dataset
+    assert config.train == budget.train
+    assert config.loss.mode == 'standard'
+    assert (config.loss.mask_weight, config.loss.dice_weight, config.loss.aux_weight,
+            config.loss.patch_weight, config.loss.edge_weight) == (2.0, 1.0, 0.4, 1.0, 1.0)
+    assert config.loss.edge_band == budget.loss.edge_band

@@ -254,7 +254,7 @@ def build_loss(config):
                            patch_weight=values['patch_weight'],
                            edge_weight=values['edge_weight'],
                            edge_band=values['edge_band'])
-    return SegmentationLoss(**values)
+    return SegmentationLoss(mask_weight=mask_weight, **values)
 
 
 class LossMeter:

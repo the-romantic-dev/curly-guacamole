@@ -1,0 +1,13 @@
+# Same model and budget as pvt_dgforce_640_tr8_aw64 (99.366 GFLOPs at 640,
+# native 1080x1920); the project objective instead of the paper's bare BCEs:
+# BCE + Dice + cls + aux on the mask, plus balanced patch/edge supervision on
+# all 13 DFDG levels. Mask weight 2 keeps the paper's 2:1:1 balance.
+extends: pvt_dgforce_640_tr8_aw64.yaml
+run_name: pvt_dgforce_640_tr8_aw64_stdloss
+loss:
+  mode: standard
+  mask_weight: 2.0
+  dice_weight: 1.0
+  aux_weight: 0.4
+  patch_weight: 1.0
+  edge_weight: 1.0

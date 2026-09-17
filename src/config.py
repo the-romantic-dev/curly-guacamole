@@ -343,7 +343,8 @@ class ExperimentConfig:
         if self.train.full_pass_epochs > self.augmentation.final_full_frame_epochs:
             raise ValueError('train.full_pass_epochs requires matching final_full_frame_epochs')
         if (self.loss.patch_weight or self.loss.edge_weight) and not (
-                self.model.disentangle_levels or self.loss.mode == 'dgforce'):
+                self.model.disentangle_levels or self.loss.mode == 'dgforce'
+                or self.model.architecture == 'pvt_dgforce'):
             raise ValueError('patch/edge supervision requires model.disentangle_levels')
         if self.loss.mode == 'dgforce' and self.model.architecture != 'pvt_dgforce':
             raise ValueError('loss.mode=dgforce requires model.architecture=pvt_dgforce')
