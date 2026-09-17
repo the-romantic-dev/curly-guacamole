@@ -285,11 +285,12 @@ class LossConfig(ConfigSection):
     hard_pixel_weight: float = 0.
     hard_pixel_fraction: float = .1
     hard_pixel_radius: int = 2
+    lovasz_weight: float = 0.
 
     def __post_init__(self):
         if self.mode not in {'standard', 'dgforce'}:
             raise ValueError("loss.mode must be 'standard' or 'dgforce'")
-        for name in ('mask_weight', 'dice_weight', 'aux_weight', 'patch_weight', 'edge_weight', 'reference_weight', 'boundary_weight', 'hard_pixel_weight'):
+        for name in ('mask_weight', 'dice_weight', 'aux_weight', 'patch_weight', 'edge_weight', 'reference_weight', 'boundary_weight', 'hard_pixel_weight', 'lovasz_weight'):
             _nonnegative(getattr(self, name), f'loss.{name}')
         if not 0 < self.hard_pixel_fraction <= 1:
             raise ValueError('loss.hard_pixel_fraction must be in (0, 1]')

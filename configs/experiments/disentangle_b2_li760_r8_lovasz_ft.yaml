@@ -1,0 +1,9 @@
+# Lovász hinge on the final mask: per-image IoU surrogate whose gradient lands
+# on the pixels that change the ranking, not the background. Aimed at the
+# small-mask "suppressed map" and shape failures of the plain/nonunit stratum.
+# Matched control: disentangle_b2_li760_r8_boundary_control_ft (same fine-tune,
+# no extra term). 0.5 is a screening weight, not a tuned optimum.
+extends: disentangle_b2_li760_r8_boundary_control_ft.yaml
+run_name: disentangle_b2_li760_r8_lovasz_ft
+loss:
+  lovasz_weight: 0.5

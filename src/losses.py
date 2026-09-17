@@ -43,6 +43,28 @@ def edge_band_target(occupancy, width):
     return dilated - eroded
 
 
+def lovasz_hinge_loss(logits, targets):
+    """Per-image Lovász hinge (Berman et al., 2018): convex surrogate of 1 - IoU.
+
+    Hinge errors are sorted per image and weighted by the Jaccard increments
+    along that ranking, so the gradient lands on the pixels that change the
+    IoU rather than spreading over the background - a 1% mask counts as much
+    as a 50% one. Soft targets binarize at half; an empty image is charged
+    for its strongest false positive only.
+    """
+    logits = logits.float().flatten(1)
+    labels = (targets > .5).float().flatten(1)
+    errors = 1 - logits * (2 * labels - 1)
+    errors, order = errors.sort(dim=1, descending=True)
+    labels = labels.gather(1, order)
+    positives = labels.sum(1, keepdim=True)
+    intersection = positives - labels.cumsum(1)
+    union = positives + (1 - labels).cumsum(1)  # never below one
+    jaccard = 1 - intersection / union
+    increments = torch.cat((jaccard[:, :1], jaccard[:, 1:] - jaccard[:, :-1]), dim=1)
+    return (errors.relu() * increments).sum(1).mean()
+
+
 def edge_loss(logits, band, max_pos_weight):
     """Balance sparse boundary positives, capping their weight for stability."""
     positive = band.sum()
@@ -122,14 +144,15 @@ class SegmentationLoss(torch.nn.Module):
                  aux_weight=.4, patch_weight=0., edge_weight=0.,
                  edge_band=3, edge_max_pos_weight=50., reference_weight=0.,
                  boundary_weight=0., boundary_radius=4, hard_pixel_weight=0.,
-                 hard_pixel_fraction=.1, hard_pixel_radius=2):
+                 hard_pixel_fraction=.1, hard_pixel_radius=2, lovasz_weight=0.):
         super().__init__()
         if mode != 'standard':
             raise ValueError("SegmentationLoss supports only mode='standard'")
-        for value in (mask_weight, dice_weight, aux_weight, patch_weight, edge_weight, reference_weight, boundary_weight, hard_pixel_weight):
+        for value in (mask_weight, dice_weight, aux_weight, patch_weight, edge_weight, reference_weight, boundary_weight, hard_pixel_weight, lovasz_weight):
             if not math.isfinite(value) or value < 0:
                 raise ValueError('Loss weights must be finite and nonnegative')
         self.mask_weight = mask_weight
+        self.lovasz_weight = lovasz_weight
         if type(edge_band) is not int or edge_band < 1 or not edge_band % 2:
             raise ValueError('edge_band must be a positive odd integer')
         if not math.isfinite(edge_max_pos_weight) or edge_max_pos_weight < 1:
@@ -165,6 +188,8 @@ class SegmentationLoss(torch.nn.Module):
             'dice': self.dice_weight * dice,
             'cls': .3 * bce_loss(out['cls_logits'].float(), labels.float()),
         }
+        if self.lovasz_weight > 0:
+            components['lovasz'] = self.lovasz_weight * lovasz_hinge_loss(out['logits'], target)
         if self.boundary_weight > 0:
             components['boundary_bce'] = self.boundary_weight * self.boundary_loss(out['logits'], target)
         if self.hard_pixel_weight > 0:
